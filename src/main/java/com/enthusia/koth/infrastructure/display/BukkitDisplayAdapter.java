@@ -18,5 +18,6 @@ public final class BukkitDisplayAdapter implements DisplayPort {
 
     @Override
     public void clear() {
+        // Action bar messages expire naturally; there is no persistent display state to clear.
     }
 }

@@ -26,13 +26,11 @@ public final class LockService {
     }
 
     public boolean allows(StartSource source) {
-        if (state == LockState.UNLOCKED) {
-            return true;
-        }
-        if (state == LockState.MANUAL_LOCKED) {
-            return source == StartSource.SCHEDULED;
-        }
-        return false;
+        return switch (state) {
+            case UNLOCKED -> true;
+            case MANUAL_LOCKED -> source == StartSource.SCHEDULED;
+            case ALL_LOCKED -> false;
+        };
     }
 
     public void reload() {

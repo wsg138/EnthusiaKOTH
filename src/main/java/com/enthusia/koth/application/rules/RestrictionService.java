@@ -70,16 +70,6 @@ public final class RestrictionService {
         cooldowns.clear();
     }
 
-    public String describeRestriction(ActiveEvent event, RestrictedItemType type) {
-        return switch (type) {
-            case ELYTRA -> event.request().rules().elytraAllowed() ? "Elytra allowed" : "Elytra disabled";
-            case MACE -> "Mace: " + event.request().rules().maceRule();
-            case SPEAR -> event.request().rules().spearAllowed() ? "Spear allowed" : "Spear disabled";
-            case ENDER_PEARL -> event.request().rules().enderPearlAllowed() ? "Pearls allowed" : "Pearls disabled";
-            case WIND_CHARGE -> event.request().rules().windChargeAllowed() ? "Wind charge allowed" : "Wind charge disabled";
-        };
-    }
-
     private RestrictionDecision decision(Player player, ActiveEvent event, RestrictedItemType type) {
         Duration cooldown = cooldownFor(event, type);
         if (!enabled(event, type)) {

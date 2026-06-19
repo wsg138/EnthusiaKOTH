@@ -33,12 +33,35 @@ public final class ManualStartService {
     }
 
     public StartResult request(Player player, KothFamily family, TeamMode mode, boolean advanced) {
+        if (isBlockedBySchedule()) {
+            long minutes = config.settings().manualBlockBeforeScheduled().toMinutes();
+            return StartResult.failure("Manual KOTH cannot start within " + minutes + " minutes of the next scheduled KOTH.");
+        }
+
+        double cost = startCost(advanced);
+        StartResult payment = charge(player, cost);
+        if (!payment.success()) {
+            return payment;
+        }
+
+        StartResult result = activeEvents.requestStart(buildRequest(player, family, mode));
+        if (!result.success() && cost > 0) {
+            economy.deposit(player, cost, "Manual KOTH start refund");
+        }
+        return result;
+    }
+
+    private boolean isBlockedBySchedule() {
         Instant nextScheduled = schedule.nextScheduledStart();
         Duration until = Duration.between(Instant.now(), nextScheduled);
-        if (!until.isNegative() && until.compareTo(config.settings().manualBlockBeforeScheduled()) <= 0) {
-            return StartResult.failure("Manual KOTH cannot start within " + config.settings().manualBlockBeforeScheduled().toMinutes() + " minutes of the next scheduled KOTH.");
-        }
-        double cost = advanced ? config.settings().advancedStartCost() : config.settings().basicStartCost();
+        return !until.isNegative() && until.compareTo(config.settings().manualBlockBeforeScheduled()) <= 0;
+    }
+
+    private double startCost(boolean advanced) {
+        return advanced ? config.settings().advancedStartCost() : config.settings().basicStartCost();
+    }
+
+    private StartResult charge(Player player, double cost) {
         if (cost > 0) {
             if (!economy.isAvailable()) {
                 return StartResult.failure("Economy is unavailable.");
@@ -51,13 +74,12 @@ public final class ManualStartService {
                 return StartResult.failure(paid.message());
             }
         }
+        return StartResult.success("Payment accepted.");
+    }
+
+    private EventRequest buildRequest(Player player, KothFamily family, TeamMode mode) {
         ItemRuleSet rules = config.settings().defaultRules().get(family);
-        EventRequest request = new EventRequest(UUID.randomUUID(), family, mode, StartSource.MANUAL, player.getUniqueId(),
+        return new EventRequest(UUID.randomUUID(), family, mode, StartSource.MANUAL, player.getUniqueId(),
                 Instant.now().plus(config.settings().manualStartDelay()), rules, false);
-        StartResult result = activeEvents.requestStart(request);
-        if (!result.success() && cost > 0) {
-            economy.deposit(player, cost, "Manual KOTH start refund");
-        }
-        return result;
     }
 }

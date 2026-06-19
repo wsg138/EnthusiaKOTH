@@ -43,7 +43,7 @@ public final class BukkitConfigurationService implements ConfigurationService {
         plugin.reloadConfig();
         FileConfiguration config = plugin.getConfig();
         migrate(config);
-        lockState = parseEnum(LockState.class, config.getString("locks.state", "UNLOCKED"), LockState.UNLOCKED);
+        lockState = parseLockState(config.getString("locks.state", "UNLOCKED"));
 
         Map<KothFamily, ArenaDefinition> arenas = new EnumMap<>(KothFamily.class);
         arenas.put(KothFamily.CAPTURE, loadArena(config, KothFamily.CAPTURE));
@@ -123,7 +123,7 @@ public final class BukkitConfigurationService implements ConfigurationService {
                 new CaptureZone(family.key() + "-zone", center, config.getDouble(base + ".radius", 5.0)),
                 config.getInt(base + ".duration-seconds", 900),
                 config.getInt(base + ".capture-seconds", family == KothFamily.CAPTURE ? 120 : 0),
-                parseEnum(CaptureLeaveBehavior.class, config.getString(base + ".leave-behavior", "RESET"), CaptureLeaveBehavior.RESET),
+                parseCaptureLeaveBehavior(config.getString(base + ".leave-behavior", "RESET")),
                 config.getDouble(base + ".decay-per-second", 1.0),
                 config.getDouble(base + ".square-size", 20.0),
                 config.getDouble(base + ".speed-blocks-per-second", 1.0)
@@ -134,7 +134,7 @@ public final class BukkitConfigurationService implements ConfigurationService {
         String base = "rules.defaults." + family.key();
         return new ItemRuleSet(
                 config.getBoolean(base + ".elytra", true),
-                parseEnum(MaceRule.class, config.getString(base + ".mace", "FULLY_ALLOWED"), MaceRule.FULLY_ALLOWED),
+                parseMaceRule(config.getString(base + ".mace", "FULLY_ALLOWED")),
                 config.getBoolean(base + ".spear", true),
                 config.getBoolean(base + ".ender-pearl", true),
                 config.getBoolean(base + ".wind-charge", true),
@@ -169,11 +169,27 @@ public final class BukkitConfigurationService implements ConfigurationService {
         return List.copyOf(parsed);
     }
 
-    private <E extends Enum<E>> E parseEnum(Class<E> type, String raw, E fallback) {
+    private LockState parseLockState(String raw) {
         try {
-            return Enum.valueOf(type, raw.toUpperCase(Locale.ROOT));
+            return LockState.valueOf(raw.toUpperCase(Locale.ROOT));
         } catch (RuntimeException ex) {
-            return fallback;
+            return LockState.UNLOCKED;
+        }
+    }
+
+    private CaptureLeaveBehavior parseCaptureLeaveBehavior(String raw) {
+        try {
+            return CaptureLeaveBehavior.valueOf(raw.toUpperCase(Locale.ROOT));
+        } catch (RuntimeException ex) {
+            return CaptureLeaveBehavior.RESET;
+        }
+    }
+
+    private MaceRule parseMaceRule(String raw) {
+        try {
+            return MaceRule.valueOf(raw.toUpperCase(Locale.ROOT));
+        } catch (RuntimeException ex) {
+            return MaceRule.FULLY_ALLOWED;
         }
     }
 }

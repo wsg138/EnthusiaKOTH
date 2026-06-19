@@ -37,27 +37,45 @@ public final class StartGuiService implements Listener {
 
     @EventHandler
     public void onClick(InventoryClickEvent event) {
-        if (!(event.getWhoClicked() instanceof Player player) || !event.getView().title().equals(Component.text(TITLE))) {
+        if (!event.getView().title().equals(Component.text(TITLE))) {
             return;
         }
         event.setCancelled(true);
+        if (!(event.getWhoClicked() instanceof Player player)) {
+            return;
+        }
         StartFlowSession session = sessions.get(player.getUniqueId());
         if (session == null) {
             return;
         }
-        int slot = event.getRawSlot();
-        if (slot == 10) session.family(KothFamily.CAPTURE);
-        if (slot == 11) session.family(KothFamily.MOVING);
-        if (slot == 12) session.family(KothFamily.CONQUEST);
-        if (slot == 14) session.teamMode(session.teamMode() == TeamMode.SOLO ? TeamMode.GUILD : TeamMode.SOLO);
-        if (slot == 16) {
-            StartResult result = manualStartService.request(player, session.family(), session.teamMode(), session.advanced());
-            player.closeInventory();
-            player.sendMessage(Component.text(result.message()));
-            sessions.remove(player.getUniqueId());
-            return;
+        handleSlot(player, session, event.getRawSlot());
+    }
+
+    private void handleSlot(Player player, StartFlowSession session, int slot) {
+        switch (slot) {
+            case 10 -> session.family(KothFamily.CAPTURE);
+            case 11 -> session.family(KothFamily.MOVING);
+            case 12 -> session.family(KothFamily.CONQUEST);
+            case 14 -> toggleTeamMode(session);
+            case 16 -> confirm(player, session);
+            default -> {
+                return;
+            }
         }
-        render(player, session);
+        if (slot != 16) {
+            render(player, session);
+        }
+    }
+
+    private void toggleTeamMode(StartFlowSession session) {
+        session.teamMode(session.teamMode() == TeamMode.SOLO ? TeamMode.GUILD : TeamMode.SOLO);
+    }
+
+    private void confirm(Player player, StartFlowSession session) {
+        StartResult result = manualStartService.request(player, session.family(), session.teamMode(), session.advanced());
+        player.closeInventory();
+        player.sendMessage(Component.text(result.message()));
+        sessions.remove(player.getUniqueId());
     }
 
     private void render(Player player, StartFlowSession session) {

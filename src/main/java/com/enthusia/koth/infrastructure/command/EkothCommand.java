@@ -49,24 +49,20 @@ public final class EkothCommand implements CommandExecutor, TabCompleter {
             sender.sendMessage(Component.text("/ekoth start | status | reload | lock <manual|all|off> | cancel"));
             return true;
         }
+        handleSubcommand(sender, args);
+        return true;
+    }
+
+    private void handleSubcommand(CommandSender sender, String[] args) {
         switch (args[0].toLowerCase(Locale.ROOT)) {
             case "start" -> start(sender);
             case "startadmin" -> startAdmin(sender, args);
             case "status" -> status(sender);
-            case "reload" -> {
-                if (!requireAdmin(sender)) return true;
-                reloadAction.run();
-                sender.sendMessage(Component.text("EnthusiaKOTH reloaded."));
-            }
+            case "reload" -> reload(sender);
             case "lock" -> lock(sender, args);
-            case "cancel" -> {
-                if (!requireAdmin(sender)) return true;
-                activeEvents.cancelActive("admin");
-                sender.sendMessage(Component.text("Active KOTH cancelled."));
-            }
+            case "cancel" -> cancel(sender);
             default -> sender.sendMessage(Component.text("Unknown subcommand."));
         }
-        return true;
     }
 
     private void start(CommandSender sender) {
@@ -129,6 +125,18 @@ public final class EkothCommand implements CommandExecutor, TabCompleter {
             }
         }
         sender.sendMessage(Component.text("Lock set to " + locks.state()));
+    }
+
+    private void reload(CommandSender sender) {
+        if (!requireAdmin(sender)) return;
+        reloadAction.run();
+        sender.sendMessage(Component.text("EnthusiaKOTH reloaded."));
+    }
+
+    private void cancel(CommandSender sender) {
+        if (!requireAdmin(sender)) return;
+        activeEvents.cancelActive("admin");
+        sender.sendMessage(Component.text("Active KOTH cancelled."));
     }
 
     private boolean requireAdmin(CommandSender sender) {

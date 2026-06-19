@@ -30,30 +30,49 @@ public final class EnthusiaKothExpansion extends PlaceholderExpansion {
         if (parts.length != 3) {
             return "";
         }
-        Optional<KothFamily> family = parts[0].equalsIgnoreCase("all") ? Optional.empty() : KothFamily.fromKey(parts[0]);
-        if (family.isEmpty() && !parts[0].equalsIgnoreCase("all")) {
+        Optional<Optional<KothFamily>> family = parseFamily(parts[0]);
+        Optional<Integer> rank = parseRank(parts[2]);
+        if (family.isEmpty() || rank.isEmpty()) {
             return "";
         }
-        int rank;
+        return findEntry(parts[1], family.get(), rank.get())
+                .map(entry -> formatEntry(parts[1], entry))
+                .orElse("");
+    }
+
+    private Optional<Optional<KothFamily>> parseFamily(String raw) {
+        if (raw.equalsIgnoreCase("all")) {
+            return Optional.of(Optional.empty());
+        }
+        return KothFamily.fromKey(raw).map(Optional::of);
+    }
+
+    private Optional<Integer> parseRank(String raw) {
         try {
-            rank = Integer.parseInt(parts[2]);
+            int rank = Integer.parseInt(raw);
+            return rank < 1 || rank > 11 ? Optional.empty() : Optional.of(rank);
         } catch (NumberFormatException ex) {
-            return "";
+            return Optional.empty();
         }
-        if (rank < 1 || rank > 11) {
-            return "";
+    }
+
+    private Optional<LeaderboardEntry> findEntry(String type, Optional<KothFamily> family, int rank) {
+        List<LeaderboardEntry> entries = leaderboard(type, family);
+        return entries.size() < rank ? Optional.empty() : Optional.of(entries.get(rank - 1));
+    }
+
+    private List<LeaderboardEntry> leaderboard(String type, Optional<KothFamily> family) {
+        if (type.equalsIgnoreCase("guild")) {
+            return stats.topGuilds(family, 11);
         }
-        List<LeaderboardEntry> entries = parts[1].equalsIgnoreCase("guild")
-                ? stats.topGuilds(family, 11)
-                : stats.topPlayers(family, 11);
-        if (entries.size() < rank) {
-            return "";
-        }
-        LeaderboardEntry entry = entries.get(rank - 1);
-        if (parts[1].equalsIgnoreCase("uuid")) {
+        return stats.topPlayers(family, 11);
+    }
+
+    private String formatEntry(String type, LeaderboardEntry entry) {
+        if (type.equalsIgnoreCase("uuid")) {
             return entry.id().toString();
         }
-        if (parts[1].equalsIgnoreCase("player") || parts[1].equalsIgnoreCase("guild")) {
+        if (type.equalsIgnoreCase("player") || type.equalsIgnoreCase("guild")) {
             return entry.displayName();
         }
         return "";
