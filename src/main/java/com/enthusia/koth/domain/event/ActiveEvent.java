@@ -66,7 +66,11 @@ public final class ActiveEvent {
     }
 
     public Map<TeamId, Double> scores() {
-        return scores;
+        return Map.copyOf(scores);
+    }
+
+    public void clearScores() {
+        scores.clear();
     }
 
     public void addScore(TeamId teamId, double amount) {

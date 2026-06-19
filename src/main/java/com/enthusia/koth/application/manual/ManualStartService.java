@@ -11,6 +11,7 @@ import com.enthusia.koth.domain.StartSource;
 import com.enthusia.koth.domain.TeamMode;
 import com.enthusia.koth.domain.event.EventRequest;
 import com.enthusia.koth.domain.rules.ItemRuleSet;
+import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import org.bukkit.entity.Player;
 
 import java.time.Duration;
@@ -23,6 +24,7 @@ public final class ManualStartService {
     private final ActiveEventService activeEvents;
     private final EconomyPort economy;
 
+    @SuppressFBWarnings(value = "EI_EXPOSE_REP2", justification = "Application services are shared by dependency injection.")
     public ManualStartService(ConfigurationService config, ScheduleService schedule, ActiveEventService activeEvents, EconomyPort economy) {
         this.config = config;
         this.schedule = schedule;

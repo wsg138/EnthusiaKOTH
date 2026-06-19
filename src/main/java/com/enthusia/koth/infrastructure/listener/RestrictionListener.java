@@ -5,6 +5,7 @@ import com.enthusia.koth.application.ports.CombatIntegrationPort;
 import com.enthusia.koth.application.rules.RestrictionDecision;
 import com.enthusia.koth.application.rules.RestrictionService;
 import com.enthusia.koth.domain.rules.RestrictedItemType;
+import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import org.bukkit.Material;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
@@ -19,6 +20,7 @@ public final class RestrictionListener implements Listener {
     private final RestrictionService restrictions;
     private final CombatIntegrationPort combat;
 
+    @SuppressFBWarnings(value = "EI_EXPOSE_REP2", justification = "Listener adapter holds application services supplied by bootstrap.")
     public RestrictionListener(ActiveEventService activeEvents, RestrictionService restrictions, CombatIntegrationPort combat) {
         this.activeEvents = activeEvents;
         this.restrictions = restrictions;

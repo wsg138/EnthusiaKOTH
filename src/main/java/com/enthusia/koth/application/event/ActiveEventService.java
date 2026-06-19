@@ -1,6 +1,5 @@
 package com.enthusia.koth.application.event;
 
-import com.enthusia.koth.application.config.ConfigurationService;
 import com.enthusia.koth.application.family.KothFamilyHandler;
 import com.enthusia.koth.application.family.TickResult;
 import com.enthusia.koth.application.lock.LockService;
@@ -13,6 +12,7 @@ import com.enthusia.koth.domain.StartSource;
 import com.enthusia.koth.domain.event.ActiveEvent;
 import com.enthusia.koth.domain.event.EventRequest;
 import com.enthusia.koth.domain.event.QueuedEvent;
+import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import org.bukkit.scheduler.BukkitTask;
 
 import java.time.Instant;
@@ -27,7 +27,6 @@ import java.util.logging.Logger;
 
 public final class ActiveEventService {
     private final ArenaRepository arenas;
-    private final ConfigurationService config;
     private final LockService locks;
     private final RewardService rewards;
     private final AnnouncementPort announcements;
@@ -38,10 +37,10 @@ public final class ActiveEventService {
     private BukkitTask task;
     private ActiveEvent activeEvent;
 
-    public ActiveEventService(ArenaRepository arenas, ConfigurationService config, LockService locks, RewardService rewards,
+    @SuppressFBWarnings(value = "EI_EXPOSE_REP2", justification = "Application services are shared by dependency injection.")
+    public ActiveEventService(ArenaRepository arenas, LockService locks, RewardService rewards,
                               AnnouncementPort announcements, DisplayPort display, Collection<KothFamilyHandler> handlers, Logger logger) {
         this.arenas = arenas;
-        this.config = config;
         this.locks = locks;
         this.rewards = rewards;
         this.announcements = announcements;

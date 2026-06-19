@@ -74,7 +74,9 @@ public final class StartGuiService implements Listener {
         ItemStack stack = new ItemStack(material);
         ItemMeta meta = stack.getItemMeta();
         meta.displayName(Component.text(name));
-        stack.setItemMeta(meta);
+        if (!stack.setItemMeta(meta)) {
+            throw new IllegalStateException("Could not set item metadata for " + material);
+        }
         return stack;
     }
 }

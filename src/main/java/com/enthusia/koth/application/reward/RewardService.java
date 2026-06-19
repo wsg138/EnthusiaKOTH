@@ -8,6 +8,7 @@ import com.enthusia.koth.application.ports.TransactionResult;
 import com.enthusia.koth.domain.TeamMode;
 import com.enthusia.koth.domain.event.ActiveEvent;
 import com.enthusia.koth.domain.team.TeamId;
+import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import org.bukkit.Bukkit;
 
 import java.util.Optional;
@@ -21,6 +22,7 @@ public final class RewardService {
     private final StatsRepository stats;
     private final Logger logger;
 
+    @SuppressFBWarnings(value = "EI_EXPOSE_REP2", justification = "Application ports and logger are shared by dependency injection.")
     public RewardService(ConfigurationService config, EconomyPort economy, GuildPort guilds, StatsRepository stats, Logger logger) {
         this.config = config;
         this.economy = economy;

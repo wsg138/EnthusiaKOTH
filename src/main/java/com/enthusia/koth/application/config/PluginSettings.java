@@ -29,4 +29,11 @@ public record PluginSettings(
         boolean discordEnabled,
         String discordWebhookUrl
 ) {
+    public PluginSettings {
+        scheduleTimes = List.copyOf(scheduleTimes);
+        arenas = Map.copyOf(arenas);
+        defaultRules = Map.copyOf(defaultRules);
+        soloRewards = Map.copyOf(soloRewards);
+        guildRewards = Map.copyOf(guildRewards);
+    }
 }

@@ -2,6 +2,7 @@ package com.enthusia.koth.infrastructure.integration;
 
 import com.enthusia.koth.application.ports.EconomyPort;
 import com.enthusia.koth.application.ports.TransactionResult;
+import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import net.milkbowl.vault.economy.Economy;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.plugin.RegisteredServiceProvider;
@@ -11,6 +12,7 @@ public final class VaultEconomyAdapter implements EconomyPort {
     private final JavaPlugin plugin;
     private Economy economy;
 
+    @SuppressFBWarnings(value = "EI_EXPOSE_REP2", justification = "JavaPlugin is the Bukkit-owned service lookup source.")
     public VaultEconomyAdapter(JavaPlugin plugin) {
         this.plugin = plugin;
         reload();

@@ -3,6 +3,7 @@ package com.enthusia.koth.infrastructure.integration;
 import com.enthusia.koth.application.ports.CombatIntegrationPort;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
+import org.bukkit.plugin.Plugin;
 
 public final class CombatXAdapter implements CombatIntegrationPort {
     @Override
@@ -12,7 +13,10 @@ public final class CombatXAdapter implements CombatIntegrationPort {
 
     @Override
     public void allowKothElytraIfSupported(Player player) {
-        player.setMetadata("enthusiakoth-elytra-allowed", new org.bukkit.metadata.FixedMetadataValue(Bukkit.getPluginManager().getPlugin("EnthusiaKOTH"), true));
+        Plugin plugin = Bukkit.getPluginManager().getPlugin("EnthusiaKOTH");
+        if (plugin != null) {
+            player.setMetadata("enthusiakoth-elytra-allowed", new org.bukkit.metadata.FixedMetadataValue(plugin, true));
+        }
     }
 
     @Override

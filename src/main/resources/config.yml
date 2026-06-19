@@ -70,18 +70,30 @@ rules:
       spear: true
       ender-pearl: true
       wind-charge: true
+      mace-cooldown-seconds: 0
+      spear-cooldown-seconds: 0
+      ender-pearl-cooldown-seconds: 0
+      wind-charge-cooldown-seconds: 0
     moving:
       elytra: false
       mace: "FULLY_DISABLED"
       spear: true
       ender-pearl: true
       wind-charge: true
+      mace-cooldown-seconds: 0
+      spear-cooldown-seconds: 0
+      ender-pearl-cooldown-seconds: 0
+      wind-charge-cooldown-seconds: 0
     conquest:
       elytra: false
       mace: "FULLY_DISABLED"
       spear: true
       ender-pearl: true
       wind-charge: true
+      mace-cooldown-seconds: 0
+      spear-cooldown-seconds: 0
+      ender-pearl-cooldown-seconds: 0
+      wind-charge-cooldown-seconds: 0
 
 conquest:
   capture-speed-bonuses:

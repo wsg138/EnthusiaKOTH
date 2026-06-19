@@ -6,6 +6,7 @@ import com.enthusia.koth.domain.KothFamily;
 import com.enthusia.koth.domain.StartSource;
 import com.enthusia.koth.domain.TeamMode;
 import com.enthusia.koth.domain.event.EventRequest;
+import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import org.bukkit.scheduler.BukkitTask;
 
 import java.time.Duration;
@@ -18,6 +19,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.ThreadLocalRandom;
 
 public final class ScheduleService {
     private final ConfigurationService config;
@@ -27,6 +29,7 @@ public final class ScheduleService {
     private List<KothFamily> dailyOrder = List.of(KothFamily.CAPTURE, KothFamily.MOVING, KothFamily.CONQUEST);
     private Instant lastTriggered;
 
+    @SuppressFBWarnings(value = "EI_EXPOSE_REP2", justification = "Application services are shared by dependency injection.")
     public ScheduleService(ConfigurationService config, ActiveEventService activeEvents) {
         this.config = config;
         this.activeEvents = activeEvents;
@@ -50,7 +53,9 @@ public final class ScheduleService {
                 if (!key.equals(lastTriggered)) {
                     lastTriggered = key;
                     KothFamily family = dailyOrder.get(i % dailyOrder.size());
-                    TeamMode mode = family == KothFamily.CONQUEST ? TeamMode.GUILD : (Math.random() < 0.5 ? TeamMode.SOLO : TeamMode.GUILD);
+                    TeamMode mode = family == KothFamily.CONQUEST
+                            ? TeamMode.GUILD
+                            : randomTeamMode();
                     activeEvents.requestStart(new EventRequest(UUID.randomUUID(), family, mode, StartSource.SCHEDULED, null,
                             Instant.now(), config.settings().defaultRules().get(family), true));
                 }
@@ -88,5 +93,9 @@ public final class ScheduleService {
         Collections.shuffle(families);
         dailyOrder = families;
         plannedDate = date;
+    }
+
+    private TeamMode randomTeamMode() {
+        return ThreadLocalRandom.current().nextBoolean() ? TeamMode.SOLO : TeamMode.GUILD;
     }
 }

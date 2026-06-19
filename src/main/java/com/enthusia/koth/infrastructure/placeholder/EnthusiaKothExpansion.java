@@ -3,6 +3,7 @@ package com.enthusia.koth.infrastructure.placeholder;
 import com.enthusia.koth.application.ports.LeaderboardEntry;
 import com.enthusia.koth.application.ports.StatsRepository;
 import com.enthusia.koth.domain.KothFamily;
+import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import me.clip.placeholderapi.expansion.PlaceholderExpansion;
 import org.bukkit.OfflinePlayer;
 import org.jetbrains.annotations.NotNull;
@@ -10,6 +11,7 @@ import org.jetbrains.annotations.NotNull;
 import java.util.List;
 import java.util.Optional;
 
+@SuppressFBWarnings(value = "HE_INHERITS_EQUALS_USE_HASHCODE", justification = "PlaceholderExpansion defines final identity equality.")
 public final class EnthusiaKothExpansion extends PlaceholderExpansion {
     private final StatsRepository stats;
 

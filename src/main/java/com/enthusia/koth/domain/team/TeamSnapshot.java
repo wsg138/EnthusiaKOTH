@@ -7,4 +7,13 @@ import java.util.Set;
 import java.util.UUID;
 
 public record TeamSnapshot(TeamId id, String displayName, Optional<ItemStack> banner, Set<UUID> onlineMembers) {
+    public TeamSnapshot {
+        banner = banner.map(ItemStack::clone);
+        onlineMembers = Set.copyOf(onlineMembers);
+    }
+
+    @Override
+    public Optional<ItemStack> banner() {
+        return banner.map(ItemStack::clone);
+    }
 }

@@ -10,6 +10,7 @@ import com.enthusia.koth.domain.StartSource;
 import com.enthusia.koth.domain.TeamMode;
 import com.enthusia.koth.domain.event.EventRequest;
 import com.enthusia.koth.infrastructure.gui.StartGuiService;
+import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import net.kyori.adventure.text.Component;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
@@ -31,6 +32,7 @@ public final class EkothCommand implements CommandExecutor, TabCompleter {
     private final StartGuiService gui;
     private final Runnable reloadAction;
 
+    @SuppressFBWarnings(value = "EI_EXPOSE_REP2", justification = "Command adapter holds application services supplied by bootstrap.")
     public EkothCommand(ConfigurationService config, ActiveEventService activeEvents, ScheduleService schedule,
                         LockService locks, StartGuiService gui, Runnable reloadAction) {
         this.config = config;
@@ -48,7 +50,7 @@ public final class EkothCommand implements CommandExecutor, TabCompleter {
             return true;
         }
         switch (args[0].toLowerCase(Locale.ROOT)) {
-            case "start" -> start(sender, args);
+            case "start" -> start(sender);
             case "startadmin" -> startAdmin(sender, args);
             case "status" -> status(sender);
             case "reload" -> {
@@ -67,7 +69,7 @@ public final class EkothCommand implements CommandExecutor, TabCompleter {
         return true;
     }
 
-    private void start(CommandSender sender, String[] args) {
+    private void start(CommandSender sender) {
         if (!(sender instanceof Player player)) {
             sender.sendMessage(Component.text("Players should use the GUI. Console can use /ekoth startadmin <family> <solo|guild>."));
             return;

@@ -12,7 +12,6 @@ import com.enthusia.koth.application.ports.AnnouncementPort;
 import com.enthusia.koth.application.ports.ArenaRepository;
 import com.enthusia.koth.application.ports.CombatIntegrationPort;
 import com.enthusia.koth.application.ports.DisplayPort;
-import com.enthusia.koth.application.ports.EconomyPort;
 import com.enthusia.koth.application.ports.GuildPort;
 import com.enthusia.koth.application.ports.StatsRepository;
 import com.enthusia.koth.application.reward.RewardService;
@@ -33,6 +32,7 @@ import com.enthusia.koth.infrastructure.listener.RestrictionListener;
 import com.enthusia.koth.infrastructure.placeholder.EnthusiaKothExpansion;
 import com.enthusia.koth.infrastructure.storage.ConfigArenaRepository;
 import com.enthusia.koth.infrastructure.storage.YamlStatsRepository;
+import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import org.bukkit.Bukkit;
 import org.bukkit.command.PluginCommand;
 import org.bukkit.plugin.java.JavaPlugin;
@@ -51,6 +51,7 @@ public final class PluginBootstrap {
     private StartGuiService gui;
     private EnthusiaKothExpansion expansion;
 
+    @SuppressFBWarnings(value = "EI_EXPOSE_REP2", justification = "JavaPlugin is the Bukkit-owned lifecycle object for this bootstrap.")
     public PluginBootstrap(JavaPlugin plugin) {
         this.plugin = plugin;
     }
@@ -68,12 +69,15 @@ public final class PluginBootstrap {
         List<KothFamilyHandler> handlers = List.of(
                 new CaptureFamilyHandler(teams),
                 new MovingFamilyHandler(teams),
-                new ConquestFamilyHandler()
+                new ConquestFamilyHandler(teams)
         );
         RewardService rewards = new RewardService(config, economy, guilds, stats, plugin.getLogger());
         DisplayPort display = new BukkitDisplayAdapter();
-        AnnouncementPort announcements = new CompositeAnnouncementPort(List.of(new BukkitAnnouncementAdapter(), new DiscordStatusAdapter()));
-        activeEvents = new ActiveEventService(arenas, config, locks, rewards, announcements, display, handlers, plugin.getLogger());
+        AnnouncementPort announcements = new CompositeAnnouncementPort(List.of(
+                new BukkitAnnouncementAdapter(),
+                new DiscordStatusAdapter(config, plugin.getLogger())
+        ));
+        activeEvents = new ActiveEventService(arenas, locks, rewards, announcements, display, handlers, plugin.getLogger());
         schedule = new ScheduleService(config, activeEvents);
         ManualStartService manualStart = new ManualStartService(config, schedule, activeEvents, economy);
         gui = new StartGuiService(manualStart);

@@ -1,7 +1,7 @@
 name: EnthusiaKOTH
 main: com.enthusia.koth.EnthusiaKothPlugin
 version: ${version}
-api-version: '1.21.11'
+api-version: '1.21'
 authors: [Enthusia]
 description: Modular KOTH framework for Enthusia.
 softdepend: [Vault, PlaceholderAPI, LumaGuilds, CombatX, CombatLogX]

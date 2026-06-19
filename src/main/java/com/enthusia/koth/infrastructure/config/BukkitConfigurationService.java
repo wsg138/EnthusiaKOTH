@@ -10,12 +10,16 @@ import com.enthusia.koth.domain.LockState;
 import com.enthusia.koth.domain.MaceRule;
 import com.enthusia.koth.domain.Position;
 import com.enthusia.koth.domain.rules.ItemRuleSet;
+import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.time.Duration;
 import java.time.LocalTime;
 import java.time.ZoneId;
+import java.time.DateTimeException;
+import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Locale;
@@ -27,6 +31,7 @@ public final class BukkitConfigurationService implements ConfigurationService {
     private PluginSettings settings;
     private LockState lockState = LockState.UNLOCKED;
 
+    @SuppressFBWarnings(value = "EI_EXPOSE_REP2", justification = "JavaPlugin is the Bukkit-owned configuration source.")
     public BukkitConfigurationService(JavaPlugin plugin) {
         this.plugin = plugin;
         plugin.saveDefaultConfig();
@@ -57,13 +62,11 @@ public final class BukkitConfigurationService implements ConfigurationService {
             guildRewards.put(family, config.getDouble("rewards." + family.key() + ".guild-vault-money", 0.0));
         }
 
-        List<LocalTime> scheduleTimes = config.getStringList("schedule.times").stream()
-                .map(LocalTime::parse)
-                .toList();
+        List<LocalTime> scheduleTimes = parseScheduleTimes(config.getStringList("schedule.times"));
 
         settings = new PluginSettings(
                 config.getInt("config-version", CURRENT_VERSION),
-                ZoneId.of(config.getString("general.timezone", "America/New_York")),
+                parseZoneId(config.getString("general.timezone", "America/New_York")),
                 Duration.ofMinutes(config.getLong("general.manual-start-block-before-scheduled-minutes", 45)),
                 Duration.ofSeconds(config.getLong("general.manual-start-delay-seconds", 60)),
                 config.getInt("general.active-radius-blocks", 96),
@@ -135,11 +138,35 @@ public final class BukkitConfigurationService implements ConfigurationService {
                 config.getBoolean(base + ".spear", true),
                 config.getBoolean(base + ".ender-pearl", true),
                 config.getBoolean(base + ".wind-charge", true),
-                Duration.ZERO,
-                Duration.ZERO,
-                Duration.ZERO,
-                Duration.ZERO
+                Duration.ofSeconds(Math.max(0, config.getLong(base + ".mace-cooldown-seconds", 0))),
+                Duration.ofSeconds(Math.max(0, config.getLong(base + ".spear-cooldown-seconds", 0))),
+                Duration.ofSeconds(Math.max(0, config.getLong(base + ".ender-pearl-cooldown-seconds", 0))),
+                Duration.ofSeconds(Math.max(0, config.getLong(base + ".wind-charge-cooldown-seconds", 0)))
         );
+    }
+
+    private ZoneId parseZoneId(String raw) {
+        try {
+            return ZoneId.of(raw);
+        } catch (DateTimeException ex) {
+            plugin.getLogger().warning("Invalid KOTH timezone '" + raw + "'. Falling back to America/New_York.");
+            return ZoneId.of("America/New_York");
+        }
+    }
+
+    private List<LocalTime> parseScheduleTimes(List<String> rawTimes) {
+        List<LocalTime> parsed = new ArrayList<>();
+        for (String raw : rawTimes) {
+            try {
+                parsed.add(LocalTime.parse(raw));
+            } catch (DateTimeParseException ex) {
+                plugin.getLogger().warning("Ignoring invalid KOTH schedule time '" + raw + "'. Expected HH:mm.");
+            }
+        }
+        if (parsed.isEmpty()) {
+            parsed.add(LocalTime.MIDNIGHT);
+        }
+        return List.copyOf(parsed);
     }
 
     private <E extends Enum<E>> E parseEnum(Class<E> type, String raw, E fallback) {

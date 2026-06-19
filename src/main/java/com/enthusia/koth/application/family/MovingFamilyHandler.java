@@ -10,9 +10,7 @@ import org.bukkit.Location;
 
 import java.time.Duration;
 import java.time.Instant;
-import java.util.Comparator;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 
 public final class MovingFamilyHandler implements KothFamilyHandler {
@@ -29,7 +27,7 @@ public final class MovingFamilyHandler implements KothFamilyHandler {
 
     @Override
     public void start(ActiveEvent event) {
-        event.scores().clear();
+        event.clearScores();
     }
 
     @Override
@@ -63,7 +61,7 @@ public final class MovingFamilyHandler implements KothFamilyHandler {
         double half = event.arena().movingSquareSize() / 2.0;
         double perimeter = event.arena().movingSquareSize() * 4.0;
         double elapsed = Math.max(0, Duration.between(event.startsAt(), now).toMillis() / 1000.0);
-        double distance = (elapsed * event.arena().movingSpeedBlocksPerSecond()) % perimeter;
+        double distance = elapsed * event.arena().movingSpeedBlocksPerSecond() % perimeter;
         double x = center.x();
         double z = center.z();
         if (distance <= half) {
@@ -86,16 +84,6 @@ public final class MovingFamilyHandler implements KothFamilyHandler {
 
     @Override
     public Optional<String> winnerDisplay(ActiveEvent event) {
-        Optional<Map.Entry<TeamId, Double>> first = event.scores().entrySet().stream()
-                .max(Comparator.comparingDouble(Map.Entry::getValue));
-        if (first.isEmpty() || first.get().getValue() <= 0.0) {
-            return Optional.empty();
-        }
-        double winningScore = first.get().getValue();
-        long tied = event.scores().values().stream().filter(score -> Double.compare(score, winningScore) == 0).count();
-        if (tied > 1) {
-            return Optional.empty();
-        }
-        return Optional.of(first.get().getKey().storageKey());
+        return WinnerSelector.winningTeamStorageKey(event);
     }
 }

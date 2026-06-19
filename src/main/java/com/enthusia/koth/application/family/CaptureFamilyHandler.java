@@ -6,12 +6,9 @@ import com.enthusia.koth.domain.KothFamily;
 import com.enthusia.koth.domain.event.ActiveEvent;
 import com.enthusia.koth.domain.team.TeamId;
 import org.bukkit.Bukkit;
-import org.bukkit.entity.Player;
 
 import java.time.Instant;
-import java.util.Comparator;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 
 public final class CaptureFamilyHandler implements KothFamilyHandler {
@@ -28,7 +25,7 @@ public final class CaptureFamilyHandler implements KothFamilyHandler {
 
     @Override
     public void start(ActiveEvent event) {
-        event.scores().clear();
+        event.clearScores();
     }
 
     @Override
@@ -67,16 +64,6 @@ public final class CaptureFamilyHandler implements KothFamilyHandler {
 
     @Override
     public Optional<String> winnerDisplay(ActiveEvent event) {
-        Optional<Map.Entry<TeamId, Double>> first = event.scores().entrySet().stream()
-                .max(Comparator.comparingDouble(Map.Entry::getValue));
-        if (first.isEmpty() || first.get().getValue() <= 0.0) {
-            return Optional.empty();
-        }
-        double winningScore = first.get().getValue();
-        long tied = event.scores().values().stream().filter(score -> Double.compare(score, winningScore) == 0).count();
-        if (tied > 1) {
-            return Optional.empty();
-        }
-        return Optional.of(first.get().getKey().storageKey());
+        return WinnerSelector.winningTeamStorageKey(event);
     }
 }
