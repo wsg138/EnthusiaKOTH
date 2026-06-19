@@ -1,0 +1,93 @@
+config-version: 1
+
+general:
+  timezone: "America/New_York"
+  manual-start-block-before-scheduled-minutes: 45
+  manual-start-delay-seconds: 60
+  active-radius-blocks: 96
+
+locks:
+  state: "UNLOCKED"
+
+manual-start:
+  basic-cost: 25000.0
+  advanced-cost: 50000.0
+
+schedule:
+  enabled: true
+  times:
+    - "00:00"
+    - "08:00"
+    - "16:00"
+
+storage:
+  stats-file: "stats.yml"
+
+discord:
+  enabled: false
+  webhook-url: ""
+  pre-start-ping-minutes: 10
+  live-update-seconds: 60
+
+arenas:
+  capture:
+    world: "world"
+    center: { x: 0.5, y: 80.0, z: 0.5 }
+    radius: 5.0
+    duration-seconds: 900
+    capture-seconds: 120
+    leave-behavior: "RESET"
+    decay-per-second: 1.0
+  moving:
+    world: "world"
+    center: { x: 40.5, y: 80.0, z: 40.5 }
+    radius: 5.0
+    duration-seconds: 900
+    square-size: 20.0
+    speed-blocks-per-second: 1.0
+  conquest:
+    enabled: false
+    duration-seconds: 1200
+    max-extensions: 10
+    extension-seconds: 60
+
+rewards:
+  capture:
+    solo-vault-money: 50000.0
+    guild-vault-money: 100000.0
+  moving:
+    solo-vault-money: 50000.0
+    guild-vault-money: 100000.0
+  conquest:
+    solo-vault-money: 75000.0
+    guild-vault-money: 150000.0
+
+rules:
+  defaults:
+    capture:
+      elytra: true
+      mace: "FULLY_ALLOWED"
+      spear: true
+      ender-pearl: true
+      wind-charge: true
+    moving:
+      elytra: false
+      mace: "FULLY_DISABLED"
+      spear: true
+      ender-pearl: true
+      wind-charge: true
+    conquest:
+      elytra: false
+      mace: "FULLY_DISABLED"
+      spear: true
+      ender-pearl: true
+      wind-charge: true
+
+conquest:
+  capture-speed-bonuses:
+    1: 0.20
+    2: 0.35
+    3: 0.55
+    4: 0.75
+    5: 0.85
+    6: 0.90

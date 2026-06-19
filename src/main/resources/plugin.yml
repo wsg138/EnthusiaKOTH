@@ -1,0 +1,21 @@
+name: EnthusiaKOTH
+main: com.enthusia.koth.EnthusiaKothPlugin
+version: ${version}
+api-version: '1.21.11'
+authors: [Enthusia]
+description: Modular KOTH framework for Enthusia.
+softdepend: [Vault, PlaceholderAPI, LumaGuilds, CombatX, CombatLogX]
+commands:
+  ekoth:
+    description: EnthusiaKOTH command.
+    usage: /ekoth
+    permission: enthusiakoth.command
+permissions:
+  enthusiakoth.command:
+    default: true
+  enthusiakoth.start.basic:
+    default: false
+  enthusiakoth.start.advanced:
+    default: false
+  enthusiakoth.admin:
+    default: op

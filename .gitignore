@@ -1,0 +1,15 @@
+target/
+build/
+.gradle/
+
+*.log
+*.tmp
+
+.env
+*.key
+*.pem
+*.p12
+
+.idea/
+*.iml
+.vscode/
