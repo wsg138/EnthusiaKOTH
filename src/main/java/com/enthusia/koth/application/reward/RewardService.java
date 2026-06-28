@@ -11,6 +11,7 @@ import com.enthusia.koth.domain.team.TeamId;
 import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import org.bukkit.Bukkit;
 
+import java.util.Locale;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.logging.Logger;
@@ -64,6 +65,6 @@ public final class RewardService {
 
     private TeamId parse(String key) {
         String[] parts = key.split(":", 2);
-        return new TeamId(TeamMode.valueOf(parts[0].toUpperCase()), UUID.fromString(parts[1]));
+        return new TeamId(TeamMode.valueOf(parts[0].toUpperCase(Locale.ROOT)), UUID.fromString(parts[1]));
     }
 }

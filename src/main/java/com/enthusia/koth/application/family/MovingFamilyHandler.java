@@ -5,12 +5,10 @@ import com.enthusia.koth.domain.KothFamily;
 import com.enthusia.koth.domain.Position;
 import com.enthusia.koth.domain.event.ActiveEvent;
 import com.enthusia.koth.domain.team.TeamId;
-import org.bukkit.Bukkit;
 import org.bukkit.Location;
 
 import java.time.Duration;
 import java.time.Instant;
-import java.util.List;
 import java.util.Optional;
 
 public final class MovingFamilyHandler implements KothFamilyHandler {
@@ -33,27 +31,13 @@ public final class MovingFamilyHandler implements KothFamilyHandler {
     @Override
     public TickResult tick(ActiveEvent event, Instant now) {
         Location point = movingPoint(event, now);
-        double radius = event.arena().zone().radius();
-        List<TeamId> controllers = Bukkit.getOnlinePlayers().stream()
-                .filter(player -> player.getWorld().equals(point.getWorld()))
-                .filter(player -> player.getLocation().distanceSquared(point) <= radius * radius)
-                .map(player -> teamResolver.resolve(player, event.request().teamMode()))
-                .flatMap(Optional::stream)
-                .distinct()
-                .toList();
-
-        if (controllers.size() == 1) {
-            TeamId controller = controllers.getFirst();
-            event.currentController(controller);
-            event.addScore(controller, 1.0);
-        } else {
-            event.currentController(null);
-        }
-
-        if (!now.isBefore(event.endsAt())) {
-            return TickResult.finished("time-limit");
-        }
-        return TickResult.running();
+        Optional<TeamId> controller = ControllerSelector.singleController(
+                ControllerSelector.teamsAtPoint(event, teamResolver, point));
+        controller.ifPresentOrElse(team -> {
+            event.currentController(team);
+            event.addScore(team, 1.0);
+        }, () -> event.currentController(null));
+        return ControllerSelector.timeLimitOrRunning(event, now);
     }
 
     public Location movingPoint(ActiveEvent event, Instant now) {

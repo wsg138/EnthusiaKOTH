@@ -9,6 +9,7 @@ import org.bukkit.inventory.ItemStack;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.EnumMap;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -73,7 +74,7 @@ public final class RestrictionService {
     private RestrictionDecision decision(Player player, ActiveEvent event, RestrictedItemType type) {
         Duration cooldown = cooldownFor(event, type);
         if (!enabled(event, type)) {
-            return RestrictionDecision.denied(type.name().toLowerCase().replace('_', ' ') + " is disabled for this KOTH.");
+            return RestrictionDecision.denied(type.name().toLowerCase(Locale.ROOT).replace('_', ' ') + " is disabled for this KOTH.");
         }
         Duration remaining = remainingCooldown(player, type, cooldown);
         if (!remaining.isZero() && !remaining.isNegative()) {

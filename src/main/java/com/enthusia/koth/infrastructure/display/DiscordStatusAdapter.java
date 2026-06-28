@@ -16,6 +16,7 @@ import java.util.logging.Logger;
 
 public final class DiscordStatusAdapter implements AnnouncementPort {
     private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(5);
+    private static final String KOTH_PREFIX = "KOTH ";
 
     private final ConfigurationService config;
     private final Logger logger;
@@ -29,25 +30,25 @@ public final class DiscordStatusAdapter implements AnnouncementPort {
 
     @Override
     public void announceStarting(ActiveEvent event) {
-        send("KOTH " + event.request().family().key() + " starts at " + event.startsAt() + ".");
+        send(KOTH_PREFIX + event.request().family().key() + " starts at " + event.startsAt() + ".");
     }
 
     @Override
     public void announceStarted(ActiveEvent event) {
-        send("KOTH " + event.request().family().key() + " is active.");
+        send(KOTH_PREFIX + event.request().family().key() + " is active.");
     }
 
     @Override
     public void announceProgress(ActiveEvent event) {
         event.currentController()
-                .ifPresent(controller -> send("KOTH " + event.request().family().key()
+                .ifPresent(controller -> send(KOTH_PREFIX + event.request().family().key()
                         + " controller: " + controller.storageKey()));
     }
 
     @Override
     public void announceEnded(ActiveEvent event, Optional<String> winner) {
         String result = winner.map(value -> "Winner: " + value).orElse("No winner.");
-        send("KOTH " + event.request().family().key() + " ended. " + result);
+        send(KOTH_PREFIX + event.request().family().key() + " ended. " + result);
     }
 
     private void send(String content) {
