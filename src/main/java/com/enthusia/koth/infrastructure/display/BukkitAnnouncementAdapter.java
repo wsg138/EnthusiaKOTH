@@ -1,6 +1,7 @@
 package com.enthusia.koth.infrastructure.display;
 
 import com.enthusia.koth.application.ports.AnnouncementPort;
+import com.enthusia.koth.domain.KothFamily;
 import com.enthusia.koth.domain.event.ActiveEvent;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
@@ -8,8 +9,14 @@ import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 
 import java.util.Optional;
+import java.time.Instant;
 
 public final class BukkitAnnouncementAdapter implements AnnouncementPort {
+    @Override
+    public void announceUpcoming(KothFamily family, Instant startsAt) {
+        Bukkit.broadcast(Component.text("KOTH " + family.key() + " starts in 5 minutes.", NamedTextColor.GOLD));
+    }
+
     @Override
     public void announceStarting(ActiveEvent event) {
         send(event, Component.text("KOTH " + event.request().family().key() + " starting soon.", NamedTextColor.GOLD));

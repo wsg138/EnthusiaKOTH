@@ -4,7 +4,7 @@ version: ${version}
 api-version: '1.21'
 authors: [Enthusia]
 description: Modular KOTH framework for Enthusia.
-softdepend: [Vault, PlaceholderAPI, LumaGuilds, CombatX, CombatLogX]
+softdepend: [Vault, PlaceholderAPI, LumaGuilds]
 commands:
   ekoth:
     description: EnthusiaKOTH command.

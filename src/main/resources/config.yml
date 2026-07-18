@@ -1,26 +1,26 @@
-config-version: 2
+config-version: 3
 
 general:
   timezone: "America/New_York"
-  manual-start-block-before-scheduled-minutes: 45
-  manual-start-delay-seconds: 60
+  manual-start-delay-seconds: 0
   active-radius-blocks: 96
 
 locks:
   state: "UNLOCKED"
 
 manual-start:
-  basic-cost: 25000.0
-  advanced-cost: 50000.0
+  basic-cost: 0.0
+  advanced-cost: 0.0
 
 private-testing:
-  lobby-seconds: 30
+  lobby-seconds: 0
   quick-match-duration-seconds: 120
   quick-capture-seconds: 15
   show-objective-particles: true
 
 schedule:
-  enabled: true
+  enabled: false
+  pre-start-warning-seconds: 300
   times:
     - "00:00"
     - "08:00"
@@ -61,14 +61,14 @@ arenas:
 
 rewards:
   capture:
-    solo-vault-money: 50000.0
-    guild-vault-money: 100000.0
+    solo-vault-money: 0.0
+    guild-vault-money: 0.0
   moving:
-    solo-vault-money: 50000.0
-    guild-vault-money: 100000.0
+    solo-vault-money: 0.0
+    guild-vault-money: 0.0
   conquest:
-    solo-vault-money: 75000.0
-    guild-vault-money: 150000.0
+    solo-vault-money: 0.0
+    guild-vault-money: 0.0
 
 rules:
   defaults:
@@ -83,8 +83,8 @@ rules:
       ender-pearl-cooldown-seconds: 0
       wind-charge-cooldown-seconds: 0
     moving:
-      elytra: false
-      mace: "FULLY_DISABLED"
+      elytra: true
+      mace: "FULLY_ALLOWED"
       spear: true
       ender-pearl: true
       wind-charge: true
@@ -93,8 +93,8 @@ rules:
       ender-pearl-cooldown-seconds: 0
       wind-charge-cooldown-seconds: 0
     conquest:
-      elytra: false
-      mace: "FULLY_DISABLED"
+      elytra: true
+      mace: "FULLY_ALLOWED"
       spear: true
       ender-pearl: true
       wind-charge: true

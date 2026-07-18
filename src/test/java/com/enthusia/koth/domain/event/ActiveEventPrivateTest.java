@@ -21,7 +21,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class ActiveEventPrivateTest {
     @Test
-    void privateEventOnlyAcceptsParticipantsDuringLobby() {
+    void privateEventAcceptsExplicitParticipantsUntilItEnds() {
         UUID owner = UUID.randomUUID();
         UUID tester = UUID.randomUUID();
         ActiveEvent event = event(EventKind.PRIVATE_TEST, owner);
@@ -31,6 +31,8 @@ final class ActiveEventPrivateTest {
         assertTrue(event.join(tester));
         assertTrue(event.isParticipant(tester));
         event.state(EventState.ACTIVE);
+        assertTrue(event.join(UUID.randomUUID()));
+        event.state(EventState.ENDING);
         assertFalse(event.join(UUID.randomUUID()));
     }
 

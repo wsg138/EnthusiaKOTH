@@ -95,8 +95,8 @@ public final class ActiveEventService {
         if (activeEvent.request().privateTestAccess() != PrivateTestAccess.PERMISSION_JOIN) {
             return StartResult.failure("This private KOTH is owner-only.");
         }
-        if (activeEvent.state() != EventState.STARTING) {
-            return StartResult.failure("This private KOTH has already started.");
+        if (activeEvent.state() != EventState.STARTING && activeEvent.state() != EventState.ACTIVE) {
+            return StartResult.failure("This private KOTH is no longer accepting participants.");
         }
         if (!activeEvent.join(player.getUniqueId())) {
             return StartResult.failure("You are already in this private KOTH.");
@@ -181,8 +181,14 @@ public final class ActiveEventService {
         Instant endsAt = startsAt.plusSeconds(eventArena.durationSeconds());
         activeEvent = new ActiveEvent(UUID.randomUUID(), request, eventArena, startsAt, endsAt);
         handler.start(activeEvent);
-        announcements.announceStarting(activeEvent);
-        return StartResult.success("KOTH starts at " + startsAt + ".");
+        boolean startsImmediately = !startsAt.isAfter(Instant.now());
+        if (!startsImmediately) {
+            announcements.announceStarting(activeEvent);
+        } else {
+            activeEvent.state(EventState.ACTIVE);
+            announcements.announceStarted(activeEvent);
+        }
+        return StartResult.success(startsImmediately ? "KOTH started." : "KOTH starts at " + startsAt + ".");
     }
 
     private boolean hasActiveOrStarting() {

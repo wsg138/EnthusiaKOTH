@@ -10,12 +10,10 @@ import com.enthusia.koth.application.lock.LockService;
 import com.enthusia.koth.application.manual.ManualStartService;
 import com.enthusia.koth.application.ports.AnnouncementPort;
 import com.enthusia.koth.application.ports.ArenaRepository;
-import com.enthusia.koth.application.ports.CombatIntegrationPort;
 import com.enthusia.koth.application.ports.DisplayPort;
 import com.enthusia.koth.application.ports.GuildPort;
 import com.enthusia.koth.application.ports.StatsRepository;
 import com.enthusia.koth.application.reward.RewardService;
-import com.enthusia.koth.application.rules.RestrictionService;
 import com.enthusia.koth.application.schedule.ScheduleService;
 import com.enthusia.koth.application.team.TeamResolver;
 import com.enthusia.koth.application.testing.PrivateTestService;
@@ -26,10 +24,8 @@ import com.enthusia.koth.infrastructure.display.BukkitDisplayAdapter;
 import com.enthusia.koth.infrastructure.display.CompositeAnnouncementPort;
 import com.enthusia.koth.infrastructure.display.DiscordStatusAdapter;
 import com.enthusia.koth.infrastructure.gui.StartGuiService;
-import com.enthusia.koth.infrastructure.integration.CombatXAdapter;
 import com.enthusia.koth.infrastructure.integration.LumaGuildsAdapter;
 import com.enthusia.koth.infrastructure.integration.VaultEconomyAdapter;
-import com.enthusia.koth.infrastructure.listener.RestrictionListener;
 import com.enthusia.koth.infrastructure.placeholder.EnthusiaKothExpansion;
 import com.enthusia.koth.infrastructure.storage.ConfigArenaRepository;
 import com.enthusia.koth.infrastructure.storage.YamlStatsRepository;
@@ -47,7 +43,6 @@ public final class PluginBootstrap {
     private ScheduleService schedule;
     private LockService locks;
     private StatsRepository stats;
-    private RestrictionService restrictions;
     private VaultEconomyAdapter economy;
     private StartGuiService gui;
     private PrivateTestService privateTests;
@@ -63,10 +58,8 @@ public final class PluginBootstrap {
         stats = new YamlStatsRepository(plugin);
         economy = new VaultEconomyAdapter(plugin);
         GuildPort guilds = new LumaGuildsAdapter();
-        CombatIntegrationPort combat = new CombatXAdapter();
         ArenaRepository arenas = new ConfigArenaRepository(config);
         locks = new LockService(config);
-        restrictions = new RestrictionService();
         TeamResolver teams = new TeamResolver(guilds);
         List<KothFamilyHandler> handlers = List.of(
                 new CaptureFamilyHandler(teams),
@@ -80,15 +73,14 @@ public final class PluginBootstrap {
                 new DiscordStatusAdapter(config, plugin.getLogger())
         ));
         activeEvents = new ActiveEventService(arenas, config, locks, rewards, announcements, display, handlers, plugin.getLogger());
-        schedule = new ScheduleService(config, activeEvents);
-        ManualStartService manualStart = new ManualStartService(config, schedule, activeEvents, economy);
+        schedule = new ScheduleService(config, activeEvents, announcements);
+        ManualStartService manualStart = new ManualStartService(config, activeEvents, economy);
         privateTests = new PrivateTestService(config, activeEvents);
         gui = new StartGuiService(manualStart);
 
         activeEvents.attachTask(Bukkit.getScheduler().runTaskTimer(plugin, activeEvents::tick, 20L, 20L));
         schedule.attachTask(Bukkit.getScheduler().runTaskTimer(plugin, schedule::tick, 20L, 20L));
         Bukkit.getPluginManager().registerEvents(gui, plugin);
-        Bukkit.getPluginManager().registerEvents(new RestrictionListener(activeEvents, restrictions, combat), plugin);
         registerCommand();
         registerPlaceholderApi();
     }
@@ -107,9 +99,6 @@ public final class PluginBootstrap {
         if (stats != null) {
             stats.save();
         }
-        if (restrictions != null) {
-            restrictions.clear();
-        }
     }
 
     private void reload() {
@@ -118,7 +107,6 @@ public final class PluginBootstrap {
         schedule.reload();
         stats.reload();
         economy.reload();
-        restrictions.clear();
     }
 
     private void registerCommand() {

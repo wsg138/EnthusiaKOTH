@@ -21,15 +21,12 @@ import org.bukkit.command.CommandSender;
 import org.bukkit.command.TabCompleter;
 import org.bukkit.entity.Player;
 import org.bukkit.Bukkit;
-import org.bukkit.configuration.file.YamlConfiguration;
-import org.bukkit.plugin.Plugin;
 
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
-import java.io.File;
 
 public final class EkothCommand implements CommandExecutor, TabCompleter {
     private final ConfigurationService config;
@@ -136,17 +133,7 @@ public final class EkothCommand implements CommandExecutor, TabCompleter {
                 sender.sendMessage(Component.text("OK: " + family.key() + " arena world is loaded."));
             }
         }
-        Plugin combatLogX = Bukkit.getPluginManager().getPlugin("CombatLogX");
-        if (combatLogX == null || !combatLogX.isEnabled()) {
-            sender.sendMessage(Component.text("WARN: CombatLogX is not enabled; KOTH's own rules still apply."));
-        } else if (!combatLogXElytraConfig(combatLogX).isFile()) {
-            sender.sendMessage(Component.text("WARN: Could not inspect CombatLogX CheatPrevention/items.yml. Verify force-prevent-elytra is false before KOTH elytra tests."));
-        } else if (YamlConfiguration.loadConfiguration(combatLogXElytraConfig(combatLogX)).getBoolean("force-prevent-elytra", false)) {
-            healthy = false;
-            sender.sendMessage(Component.text("FAIL: CombatLogX force-prevent-elytra is enabled. Set it to false before allowing KOTH elytra."));
-        } else {
-            sender.sendMessage(Component.text("OK: CombatLogX does not force-disable active elytras."));
-        }
+        sender.sendMessage(Component.text("INFO: KOTH does not modify combat, item, or combat-tag movement rules."));
         sender.sendMessage(Component.text(healthy ? "KOTH preflight passed." : "KOTH preflight has blocking issues."));
     }
 
@@ -305,7 +292,4 @@ public final class EkothCommand implements CommandExecutor, TabCompleter {
         }
     }
 
-    private File combatLogXElytraConfig(Plugin combatLogX) {
-        return new File(combatLogX.getDataFolder(), "expansions/CheatPrevention/items.yml");
-    }
 }

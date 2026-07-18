@@ -14,7 +14,6 @@ import java.util.Map;
 public record PluginSettings(
         int configVersion,
         ZoneId scheduleZone,
-        Duration manualBlockBeforeScheduled,
         Duration manualStartDelay,
         int activeRadiusBlocks,
         LockState lockState,
@@ -22,6 +21,7 @@ public record PluginSettings(
         double advancedStartCost,
         boolean scheduleEnabled,
         List<LocalTime> scheduleTimes,
+        Duration schedulePreStartWarning,
         Map<KothFamily, ArenaDefinition> arenas,
         Map<KothFamily, Boolean> enabledFamilies,
         Map<KothFamily, ItemRuleSet> defaultRules,

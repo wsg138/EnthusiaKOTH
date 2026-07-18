@@ -86,7 +86,7 @@ public final class ActiveEvent {
     }
 
     public boolean join(UUID playerId) {
-        if (!isPrivateTest() || state != EventState.STARTING) {
+        if (!isPrivateTest() || (state != EventState.STARTING && state != EventState.ACTIVE)) {
             return false;
         }
         return participants.add(playerId);

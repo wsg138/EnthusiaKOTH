@@ -2,6 +2,7 @@ package com.enthusia.koth.infrastructure.display;
 
 import com.enthusia.koth.application.config.ConfigurationService;
 import com.enthusia.koth.application.ports.AnnouncementPort;
+import com.enthusia.koth.domain.KothFamily;
 import com.enthusia.koth.domain.event.ActiveEvent;
 import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 
@@ -26,6 +27,11 @@ public final class DiscordStatusAdapter implements AnnouncementPort {
     public DiscordStatusAdapter(ConfigurationService config, Logger logger) {
         this.config = config;
         this.logger = logger;
+    }
+
+    @Override
+    public void announceUpcoming(KothFamily family, java.time.Instant startsAt) {
+        send(KOTH_PREFIX + family.key() + " starts in 5 minutes.");
     }
 
     @Override

@@ -5,7 +5,6 @@ import com.enthusia.koth.application.event.ActiveEventService;
 import com.enthusia.koth.application.event.StartResult;
 import com.enthusia.koth.application.ports.EconomyPort;
 import com.enthusia.koth.application.ports.TransactionResult;
-import com.enthusia.koth.application.schedule.ScheduleService;
 import com.enthusia.koth.domain.KothFamily;
 import com.enthusia.koth.domain.EventKind;
 import com.enthusia.koth.domain.StartSource;
@@ -15,30 +14,22 @@ import com.enthusia.koth.domain.rules.ItemRuleSet;
 import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import org.bukkit.entity.Player;
 
-import java.time.Duration;
 import java.time.Instant;
 import java.util.UUID;
 
 public final class ManualStartService {
     private final ConfigurationService config;
-    private final ScheduleService schedule;
     private final ActiveEventService activeEvents;
     private final EconomyPort economy;
 
     @SuppressFBWarnings(value = "EI_EXPOSE_REP2", justification = "Application services are shared by dependency injection.")
-    public ManualStartService(ConfigurationService config, ScheduleService schedule, ActiveEventService activeEvents, EconomyPort economy) {
+    public ManualStartService(ConfigurationService config, ActiveEventService activeEvents, EconomyPort economy) {
         this.config = config;
-        this.schedule = schedule;
         this.activeEvents = activeEvents;
         this.economy = economy;
     }
 
     public StartResult request(Player player, KothFamily family, TeamMode mode, boolean advanced) {
-        if (isBlockedBySchedule()) {
-            long minutes = config.settings().manualBlockBeforeScheduled().toMinutes();
-            return StartResult.failure("Manual KOTH cannot start within " + minutes + " minutes of the next scheduled KOTH.");
-        }
-
         double cost = startCost(advanced);
         StartResult payment = charge(player, cost);
         if (!payment.success()) {
@@ -50,12 +41,6 @@ public final class ManualStartService {
             economy.deposit(player, cost, "Manual KOTH start refund");
         }
         return result;
-    }
-
-    private boolean isBlockedBySchedule() {
-        Instant nextScheduled = schedule.nextScheduledStart();
-        Duration until = Duration.between(Instant.now(), nextScheduled);
-        return !until.isNegative() && until.compareTo(config.settings().manualBlockBeforeScheduled()) <= 0;
     }
 
     private double startCost(boolean advanced) {

@@ -2,6 +2,7 @@ package com.enthusia.koth.application.schedule;
 
 import com.enthusia.koth.application.config.ConfigurationService;
 import com.enthusia.koth.application.event.ActiveEventService;
+import com.enthusia.koth.application.ports.AnnouncementPort;
 import com.enthusia.koth.domain.KothFamily;
 import com.enthusia.koth.domain.EventKind;
 import com.enthusia.koth.domain.StartSource;
@@ -25,15 +26,18 @@ import java.util.concurrent.ThreadLocalRandom;
 public final class ScheduleService {
     private final ConfigurationService config;
     private final ActiveEventService activeEvents;
+    private final AnnouncementPort announcements;
     private BukkitTask task;
     private LocalDate plannedDate;
     private List<KothFamily> dailyOrder = List.of(KothFamily.CAPTURE, KothFamily.MOVING, KothFamily.CONQUEST);
     private Instant lastTriggered;
+    private Instant lastWarned;
 
     @SuppressFBWarnings(value = "EI_EXPOSE_REP2", justification = "Application services are shared by dependency injection.")
-    public ScheduleService(ConfigurationService config, ActiveEventService activeEvents) {
+    public ScheduleService(ConfigurationService config, ActiveEventService activeEvents, AnnouncementPort announcements) {
         this.config = config;
         this.activeEvents = activeEvents;
+        this.announcements = announcements;
     }
 
     public void attachTask(BukkitTask task) {
@@ -52,6 +56,16 @@ public final class ScheduleService {
                 continue;
             }
             ZonedDateTime scheduled = ZonedDateTime.of(LocalDateTime.of(now.toLocalDate(), times.get(i)), config.settings().scheduleZone());
+            ZonedDateTime warning = scheduled.minus(config.settings().schedulePreStartWarning());
+            if (!config.settings().schedulePreStartWarning().isZero()
+                    && !now.isBefore(warning) && now.isBefore(scheduled)
+                    && Duration.between(warning, now).toSeconds() <= 30) {
+                Instant warningKey = scheduled.toInstant();
+                if (!warningKey.equals(lastWarned)) {
+                    lastWarned = warningKey;
+                    announcements.announceUpcoming(dailyOrder.get(i % dailyOrder.size()), warningKey);
+                }
+            }
             if (!now.isBefore(scheduled) && Duration.between(scheduled, now).abs().toSeconds() <= 30) {
                 Instant key = scheduled.toInstant();
                 if (!key.equals(lastTriggered)) {
@@ -80,6 +94,7 @@ public final class ScheduleService {
     public void reload() {
         plannedDate = null;
         lastTriggered = null;
+        lastWarned = null;
     }
 
     public void shutdown() {

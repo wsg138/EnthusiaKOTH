@@ -27,7 +27,7 @@ import java.util.Locale;
 import java.util.Map;
 
 public final class BukkitConfigurationService implements ConfigurationService {
-    private static final int CURRENT_VERSION = 2;
+    private static final int CURRENT_VERSION = 3;
     private final JavaPlugin plugin;
     private PluginSettings settings;
     private LockState lockState = LockState.UNLOCKED;
@@ -72,14 +72,14 @@ public final class BukkitConfigurationService implements ConfigurationService {
         settings = new PluginSettings(
                 config.getInt("config-version", CURRENT_VERSION),
                 parseZoneId(config.getString("general.timezone", "America/New_York")),
-                Duration.ofMinutes(config.getLong("general.manual-start-block-before-scheduled-minutes", 45)),
-                Duration.ofSeconds(config.getLong("general.manual-start-delay-seconds", 60)),
+                Duration.ofSeconds(config.getLong("general.manual-start-delay-seconds", 0)),
                 config.getInt("general.active-radius-blocks", 96),
                 lockState,
                 config.getDouble("manual-start.basic-cost", 0.0),
                 config.getDouble("manual-start.advanced-cost", 0.0),
-                config.getBoolean("schedule.enabled", true),
+                config.getBoolean("schedule.enabled", false),
                 scheduleTimes,
+                Duration.ofSeconds(Math.max(0, config.getLong("schedule.pre-start-warning-seconds", 300))),
                 arenas,
                 enabledFamilies,
                 rules,
@@ -122,6 +122,9 @@ public final class BukkitConfigurationService implements ConfigurationService {
             setIfAbsent(config, "private-testing.show-objective-particles", true);
             setIfAbsent(config, "arenas.capture.enabled", true);
             setIfAbsent(config, "arenas.moving.enabled", true);
+        }
+        if (version < 3) {
+            setIfAbsent(config, "schedule.pre-start-warning-seconds", 300);
         }
         if (version < CURRENT_VERSION) {
             config.set("config-version", CURRENT_VERSION);
