@@ -1,6 +1,7 @@
 package com.enthusia.koth.infrastructure.config;
 
 import com.enthusia.koth.application.config.ConfigurationService;
+import com.enthusia.koth.application.config.PrivateTestingSettings;
 import com.enthusia.koth.application.config.PluginSettings;
 import com.enthusia.koth.domain.ArenaDefinition;
 import com.enthusia.koth.domain.CaptureLeaveBehavior;
@@ -26,7 +27,7 @@ import java.util.Locale;
 import java.util.Map;
 
 public final class BukkitConfigurationService implements ConfigurationService {
-    private static final int CURRENT_VERSION = 1;
+    private static final int CURRENT_VERSION = 2;
     private final JavaPlugin plugin;
     private PluginSettings settings;
     private LockState lockState = LockState.UNLOCKED;
@@ -46,9 +47,13 @@ public final class BukkitConfigurationService implements ConfigurationService {
         lockState = parseLockState(config.getString("locks.state", "UNLOCKED"));
 
         Map<KothFamily, ArenaDefinition> arenas = new EnumMap<>(KothFamily.class);
+        Map<KothFamily, Boolean> enabledFamilies = new EnumMap<>(KothFamily.class);
         arenas.put(KothFamily.CAPTURE, loadArena(config, KothFamily.CAPTURE));
+        enabledFamilies.put(KothFamily.CAPTURE, config.getBoolean("arenas.capture.enabled", true));
         arenas.put(KothFamily.MOVING, loadArena(config, KothFamily.MOVING));
+        enabledFamilies.put(KothFamily.MOVING, config.getBoolean("arenas.moving.enabled", true));
         arenas.put(KothFamily.CONQUEST, loadArena(config, KothFamily.CONQUEST));
+        enabledFamilies.put(KothFamily.CONQUEST, config.getBoolean("arenas.conquest.enabled", false));
 
         Map<KothFamily, ItemRuleSet> rules = new EnumMap<>(KothFamily.class);
         for (KothFamily family : KothFamily.values()) {
@@ -76,11 +81,18 @@ public final class BukkitConfigurationService implements ConfigurationService {
                 config.getBoolean("schedule.enabled", true),
                 scheduleTimes,
                 arenas,
+                enabledFamilies,
                 rules,
                 soloRewards,
                 guildRewards,
                 config.getBoolean("discord.enabled", false),
-                config.getString("discord.webhook-url", "")
+                config.getString("discord.webhook-url", ""),
+                new PrivateTestingSettings(
+                        Duration.ofSeconds(Math.max(0, config.getLong("private-testing.lobby-seconds", 30))),
+                        Duration.ofSeconds(Math.max(1, config.getLong("private-testing.quick-match-duration-seconds", 120))),
+                        Math.max(1, config.getInt("private-testing.quick-capture-seconds", 15)),
+                        config.getBoolean("private-testing.show-objective-particles", true)
+                )
         );
     }
 
@@ -103,9 +115,23 @@ public final class BukkitConfigurationService implements ConfigurationService {
 
     private void migrate(FileConfiguration config) {
         int version = config.getInt("config-version", 0);
+        if (version < 2) {
+            setIfAbsent(config, "private-testing.lobby-seconds", 30);
+            setIfAbsent(config, "private-testing.quick-match-duration-seconds", 120);
+            setIfAbsent(config, "private-testing.quick-capture-seconds", 15);
+            setIfAbsent(config, "private-testing.show-objective-particles", true);
+            setIfAbsent(config, "arenas.capture.enabled", true);
+            setIfAbsent(config, "arenas.moving.enabled", true);
+        }
         if (version < CURRENT_VERSION) {
             config.set("config-version", CURRENT_VERSION);
             plugin.saveConfig();
+        }
+    }
+
+    private void setIfAbsent(FileConfiguration config, String path, Object value) {
+        if (!config.contains(path)) {
+            config.set(path, value);
         }
     }
 

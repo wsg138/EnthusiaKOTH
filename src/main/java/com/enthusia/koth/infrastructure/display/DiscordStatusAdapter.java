@@ -30,16 +30,19 @@ public final class DiscordStatusAdapter implements AnnouncementPort {
 
     @Override
     public void announceStarting(ActiveEvent event) {
+        if (event.isPrivateTest()) return;
         send(KOTH_PREFIX + event.request().family().key() + " starts at " + event.startsAt() + ".");
     }
 
     @Override
     public void announceStarted(ActiveEvent event) {
+        if (event.isPrivateTest()) return;
         send(KOTH_PREFIX + event.request().family().key() + " is active.");
     }
 
     @Override
     public void announceProgress(ActiveEvent event) {
+        if (event.isPrivateTest()) return;
         event.currentController()
                 .ifPresent(controller -> send(KOTH_PREFIX + event.request().family().key()
                         + " controller: " + controller.storageKey()));
@@ -47,6 +50,7 @@ public final class DiscordStatusAdapter implements AnnouncementPort {
 
     @Override
     public void announceEnded(ActiveEvent event, Optional<String> winner) {
+        if (event.isPrivateTest()) return;
         String result = winner.map(value -> "Winner: " + value).orElse("No winner.");
         send(KOTH_PREFIX + event.request().family().key() + " ended. " + result);
     }

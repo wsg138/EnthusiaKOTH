@@ -1,5 +1,6 @@
 package com.enthusia.koth.application.event;
 
+import com.enthusia.koth.application.config.ConfigurationService;
 import com.enthusia.koth.application.family.KothFamilyHandler;
 import com.enthusia.koth.application.family.TickResult;
 import com.enthusia.koth.application.lock.LockService;
@@ -8,6 +9,9 @@ import com.enthusia.koth.application.ports.ArenaRepository;
 import com.enthusia.koth.application.ports.DisplayPort;
 import com.enthusia.koth.application.reward.RewardService;
 import com.enthusia.koth.domain.EventState;
+import com.enthusia.koth.domain.ArenaDefinition;
+import com.enthusia.koth.domain.EventKind;
+import com.enthusia.koth.domain.PrivateTestAccess;
 import com.enthusia.koth.domain.StartSource;
 import com.enthusia.koth.domain.event.ActiveEvent;
 import com.enthusia.koth.domain.event.EventRequest;
@@ -27,6 +31,7 @@ import java.util.logging.Logger;
 
 public final class ActiveEventService {
     private final ArenaRepository arenas;
+    private final ConfigurationService configuration;
     private final LockService locks;
     private final RewardService rewards;
     private final AnnouncementPort announcements;
@@ -38,9 +43,10 @@ public final class ActiveEventService {
     private ActiveEvent activeEvent;
 
     @SuppressFBWarnings(value = "EI_EXPOSE_REP2", justification = "Application services are shared by dependency injection.")
-    public ActiveEventService(ArenaRepository arenas, LockService locks, RewardService rewards,
+    public ActiveEventService(ArenaRepository arenas, ConfigurationService configuration, LockService locks, RewardService rewards,
                               AnnouncementPort announcements, DisplayPort display, Collection<KothFamilyHandler> handlers, Logger logger) {
         this.arenas = arenas;
+        this.configuration = configuration;
         this.locks = locks;
         this.rewards = rewards;
         this.announcements = announcements;
@@ -55,10 +61,13 @@ public final class ActiveEventService {
     }
 
     public synchronized StartResult requestStart(EventRequest request) {
+        if (!configuration.settings().isFamilyEnabled(request.family())) {
+            return StartResult.failure(request.family().key() + " is not enabled.");
+        }
         if (!locks.allows(request.source())) {
             return StartResult.failure("KOTH starts are locked.");
         }
-        if (request.source() == StartSource.MANUAL && hasActiveOrStarting()) {
+        if ((request.source() == StartSource.MANUAL || request.source() == StartSource.PRIVATE_TEST) && hasActiveOrStarting()) {
             return StartResult.failure("A KOTH is already running. Manual KOTHs do not queue.");
         }
         if (hasActiveOrStarting()) {
@@ -77,6 +86,41 @@ public final class ActiveEventService {
 
     public synchronized int queuedCount() {
         return queue.size();
+    }
+
+    public synchronized StartResult joinPrivateTest(org.bukkit.entity.Player player) {
+        if (activeEvent == null || !activeEvent.isPrivateTest()) {
+            return StartResult.failure("There is no private KOTH lobby to join.");
+        }
+        if (activeEvent.request().privateTestAccess() != PrivateTestAccess.PERMISSION_JOIN) {
+            return StartResult.failure("This private KOTH is owner-only.");
+        }
+        if (activeEvent.state() != EventState.STARTING) {
+            return StartResult.failure("This private KOTH has already started.");
+        }
+        if (!activeEvent.join(player.getUniqueId())) {
+            return StartResult.failure("You are already in this private KOTH.");
+        }
+        return StartResult.success("Joined the private KOTH.");
+    }
+
+    public synchronized StartResult leavePrivateTest(org.bukkit.entity.Player player) {
+        if (activeEvent == null || !activeEvent.isPrivateTest() || !activeEvent.isParticipant(player.getUniqueId())) {
+            return StartResult.failure("You are not in a private KOTH.");
+        }
+        if (activeEvent.isOwner(player.getUniqueId())) {
+            return StartResult.failure("The private KOTH owner must cancel the event instead.");
+        }
+        activeEvent.leave(player.getUniqueId());
+        return StartResult.success("Left the private KOTH.");
+    }
+
+    public synchronized StartResult cancelPrivateTest(org.bukkit.entity.Player player) {
+        if (activeEvent == null || !activeEvent.isPrivateTest() || !activeEvent.isOwner(player.getUniqueId())) {
+            return StartResult.failure("You do not own an active private KOTH.");
+        }
+        cancelActive("owner cancelled private test");
+        return StartResult.success("Private KOTH cancelled.");
     }
 
     public synchronized void cancelActive(String reason) {
@@ -132,9 +176,10 @@ public final class ActiveEventService {
         if (handler == null) {
             return StartResult.failure("No handler registered for " + request.family().key() + ".");
         }
+        ArenaDefinition eventArena = applyPrivateTestTiming(request, arena.get());
         Instant startsAt = request.startAt();
-        Instant endsAt = startsAt.plusSeconds(arena.get().durationSeconds());
-        activeEvent = new ActiveEvent(UUID.randomUUID(), request, arena.get(), startsAt, endsAt);
+        Instant endsAt = startsAt.plusSeconds(eventArena.durationSeconds());
+        activeEvent = new ActiveEvent(UUID.randomUUID(), request, eventArena, startsAt, endsAt);
         handler.start(activeEvent);
         announcements.announceStarting(activeEvent);
         return StartResult.success("KOTH starts at " + startsAt + ".");
@@ -150,7 +195,11 @@ public final class ActiveEventService {
         Optional<String> winnerDisplay = rewards.rewardWinner(activeEvent, winnerKey);
         activeEvent.state(EventState.COMPLETED);
         announcements.announceEnded(activeEvent, winnerDisplay);
-        logger.info("KOTH " + activeEvent.id() + " ended. Winner=" + winnerDisplay.orElse("none"));
+        if (activeEvent.isPrivateTest()) {
+            logger.info("Private KOTH " + activeEvent.id() + " ended.");
+        } else {
+            logger.info("KOTH " + activeEvent.id() + " ended. Winner=" + winnerDisplay.orElse("none"));
+        }
         activeEvent = null;
         display.clear();
         startNextQueued();
@@ -160,8 +209,20 @@ public final class ActiveEventService {
         QueuedEvent next = queue.poll();
         if (next != null) {
             EventRequest request = new EventRequest(next.request().requestId(), next.request().family(), next.request().teamMode(),
-                    next.request().source(), next.request().requestedBy(), Instant.now(), next.request().rules(), true);
+                    next.request().source(), next.request().requestedBy(), Instant.now(), next.request().rules(), true,
+                    EventKind.STANDARD, null, false);
             startNow(request);
         }
+    }
+
+    private ArenaDefinition applyPrivateTestTiming(EventRequest request, ArenaDefinition arena) {
+        if (!request.isPrivateTest() || !request.quickTiming()) {
+            return arena;
+        }
+        var testing = configuration.settings().privateTesting();
+        return new ArenaDefinition(arena.id(), arena.family(), arena.zone(),
+                Math.toIntExact(testing.quickMatchDuration().toSeconds()),
+                arena.family() == com.enthusia.koth.domain.KothFamily.CAPTURE ? testing.quickCaptureSeconds() : arena.captureSeconds(),
+                arena.leaveBehavior(), arena.decayPerSecond(), arena.movingSquareSize(), arena.movingSpeedBlocksPerSecond());
     }
 }

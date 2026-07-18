@@ -28,7 +28,7 @@ public final class LockService {
     public boolean allows(StartSource source) {
         return switch (state) {
             case UNLOCKED -> true;
-            case MANUAL_LOCKED -> source == StartSource.SCHEDULED;
+            case MANUAL_LOCKED -> source == StartSource.SCHEDULED || source == StartSource.PRIVATE_TEST;
             case ALL_LOCKED -> false;
         };
     }

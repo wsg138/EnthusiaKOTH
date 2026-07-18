@@ -19,3 +19,10 @@ permissions:
     default: false
   enthusiakoth.admin:
     default: op
+    children:
+      enthusiakoth.test.start: true
+      enthusiakoth.test.join: true
+  enthusiakoth.test.start:
+    default: op
+  enthusiakoth.test.join:
+    default: false

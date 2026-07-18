@@ -7,6 +7,7 @@ import com.enthusia.koth.application.ports.EconomyPort;
 import com.enthusia.koth.application.ports.TransactionResult;
 import com.enthusia.koth.application.schedule.ScheduleService;
 import com.enthusia.koth.domain.KothFamily;
+import com.enthusia.koth.domain.EventKind;
 import com.enthusia.koth.domain.StartSource;
 import com.enthusia.koth.domain.TeamMode;
 import com.enthusia.koth.domain.event.EventRequest;
@@ -80,6 +81,6 @@ public final class ManualStartService {
     private EventRequest buildRequest(Player player, KothFamily family, TeamMode mode) {
         ItemRuleSet rules = config.settings().defaultRules().get(family);
         return new EventRequest(UUID.randomUUID(), family, mode, StartSource.MANUAL, player.getUniqueId(),
-                Instant.now().plus(config.settings().manualStartDelay()), rules, false);
+                Instant.now().plus(config.settings().manualStartDelay()), rules, false, EventKind.STANDARD, null, false);
     }
 }

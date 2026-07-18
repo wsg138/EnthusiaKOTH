@@ -24,6 +24,7 @@ public final class CaptureFamilyHandler implements KothFamilyHandler {
     @Override
     public void start(ActiveEvent event) {
         event.clearScores();
+        event.objectivePosition(event.arena().zone().center());
     }
 
     @Override

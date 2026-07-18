@@ -1,4 +1,4 @@
-config-version: 1
+config-version: 2
 
 general:
   timezone: "America/New_York"
@@ -12,6 +12,12 @@ locks:
 manual-start:
   basic-cost: 25000.0
   advanced-cost: 50000.0
+
+private-testing:
+  lobby-seconds: 30
+  quick-match-duration-seconds: 120
+  quick-capture-seconds: 15
+  show-objective-particles: true
 
 schedule:
   enabled: true
@@ -31,6 +37,7 @@ discord:
 
 arenas:
   capture:
+    enabled: true
     world: "world"
     center: { x: 0.5, y: 80.0, z: 0.5 }
     radius: 5.0
@@ -39,6 +46,7 @@ arenas:
     leave-behavior: "RESET"
     decay-per-second: 1.0
   moving:
+    enabled: true
     world: "world"
     center: { x: 40.5, y: 80.0, z: 40.5 }
     radius: 5.0

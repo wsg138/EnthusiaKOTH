@@ -37,6 +37,9 @@ public final class RewardService {
             return Optional.empty();
         }
         TeamId teamId = parse(winnerKey.get());
+        if (event.isPrivateTest()) {
+            return displayName(teamId);
+        }
         if (teamId.mode() == TeamMode.SOLO) {
             double amount = config.settings().soloRewards().getOrDefault(event.request().family(), 0.0);
             UUID playerId = teamId.id();
@@ -66,5 +69,12 @@ public final class RewardService {
     private TeamId parse(String key) {
         String[] parts = key.split(":", 2);
         return new TeamId(TeamMode.valueOf(parts[0].toUpperCase(Locale.ROOT)), UUID.fromString(parts[1]));
+    }
+
+    private Optional<String> displayName(TeamId teamId) {
+        if (teamId.mode() == TeamMode.SOLO) {
+            return Optional.of(Optional.ofNullable(Bukkit.getOfflinePlayer(teamId.id()).getName()).orElse(teamId.id().toString()));
+        }
+        return Optional.of(guilds.guild(teamId.id()).map(snapshot -> snapshot.displayName()).orElse(teamId.id().toString()));
     }
 }

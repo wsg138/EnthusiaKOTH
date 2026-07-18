@@ -18,6 +18,7 @@ import com.enthusia.koth.application.reward.RewardService;
 import com.enthusia.koth.application.rules.RestrictionService;
 import com.enthusia.koth.application.schedule.ScheduleService;
 import com.enthusia.koth.application.team.TeamResolver;
+import com.enthusia.koth.application.testing.PrivateTestService;
 import com.enthusia.koth.infrastructure.command.EkothCommand;
 import com.enthusia.koth.infrastructure.config.BukkitConfigurationService;
 import com.enthusia.koth.infrastructure.display.BukkitAnnouncementAdapter;
@@ -49,6 +50,7 @@ public final class PluginBootstrap {
     private RestrictionService restrictions;
     private VaultEconomyAdapter economy;
     private StartGuiService gui;
+    private PrivateTestService privateTests;
     private EnthusiaKothExpansion expansion;
 
     @SuppressFBWarnings(value = "EI_EXPOSE_REP2", justification = "JavaPlugin is the Bukkit-owned lifecycle object for this bootstrap.")
@@ -72,14 +74,15 @@ public final class PluginBootstrap {
                 new ConquestFamilyHandler(teams)
         );
         RewardService rewards = new RewardService(config, economy, guilds, stats, plugin.getLogger());
-        DisplayPort display = new BukkitDisplayAdapter();
+        DisplayPort display = new BukkitDisplayAdapter(config);
         AnnouncementPort announcements = new CompositeAnnouncementPort(List.of(
                 new BukkitAnnouncementAdapter(),
                 new DiscordStatusAdapter(config, plugin.getLogger())
         ));
-        activeEvents = new ActiveEventService(arenas, locks, rewards, announcements, display, handlers, plugin.getLogger());
+        activeEvents = new ActiveEventService(arenas, config, locks, rewards, announcements, display, handlers, plugin.getLogger());
         schedule = new ScheduleService(config, activeEvents);
         ManualStartService manualStart = new ManualStartService(config, schedule, activeEvents, economy);
+        privateTests = new PrivateTestService(config, activeEvents);
         gui = new StartGuiService(manualStart);
 
         activeEvents.attachTask(Bukkit.getScheduler().runTaskTimer(plugin, activeEvents::tick, 20L, 20L));
@@ -123,7 +126,7 @@ public final class PluginBootstrap {
         if (command == null) {
             throw new IllegalStateException("Command /ekoth is missing from plugin.yml");
         }
-        EkothCommand executor = new EkothCommand(config, activeEvents, schedule, locks, gui, this::reload);
+        EkothCommand executor = new EkothCommand(config, activeEvents, schedule, locks, gui, privateTests, this::reload);
         command.setExecutor(executor);
         command.setTabCompleter(executor);
     }

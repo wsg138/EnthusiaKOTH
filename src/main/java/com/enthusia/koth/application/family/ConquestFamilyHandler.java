@@ -23,6 +23,7 @@ public final class ConquestFamilyHandler implements KothFamilyHandler {
     @Override
     public void start(ActiveEvent event) {
         event.clearScores();
+        event.objectivePosition(event.arena().zone().center());
     }
 
     @Override

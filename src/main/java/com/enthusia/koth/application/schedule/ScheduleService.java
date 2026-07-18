@@ -3,6 +3,7 @@ package com.enthusia.koth.application.schedule;
 import com.enthusia.koth.application.config.ConfigurationService;
 import com.enthusia.koth.application.event.ActiveEventService;
 import com.enthusia.koth.domain.KothFamily;
+import com.enthusia.koth.domain.EventKind;
 import com.enthusia.koth.domain.StartSource;
 import com.enthusia.koth.domain.TeamMode;
 import com.enthusia.koth.domain.event.EventRequest;
@@ -47,6 +48,9 @@ public final class ScheduleService {
         ensureOrder(now.toLocalDate());
         List<LocalTime> times = config.settings().scheduleTimes();
         for (int i = 0; i < times.size(); i++) {
+            if (i >= dailyOrder.size()) {
+                continue;
+            }
             ZonedDateTime scheduled = ZonedDateTime.of(LocalDateTime.of(now.toLocalDate(), times.get(i)), config.settings().scheduleZone());
             if (!now.isBefore(scheduled) && Duration.between(scheduled, now).abs().toSeconds() <= 30) {
                 Instant key = scheduled.toInstant();
@@ -57,7 +61,7 @@ public final class ScheduleService {
                             ? TeamMode.GUILD
                             : randomTeamMode();
                     activeEvents.requestStart(new EventRequest(UUID.randomUUID(), family, mode, StartSource.SCHEDULED, null,
-                            Instant.now(), config.settings().defaultRules().get(family), true));
+                            Instant.now(), config.settings().defaultRules().get(family), true, EventKind.STANDARD, null, false));
                 }
             }
         }
@@ -89,7 +93,12 @@ public final class ScheduleService {
         if (date.equals(plannedDate)) {
             return;
         }
-        List<KothFamily> families = new ArrayList<>(List.of(KothFamily.CAPTURE, KothFamily.MOVING, KothFamily.CONQUEST));
+        List<KothFamily> families = new ArrayList<>();
+        for (KothFamily family : KothFamily.values()) {
+            if (config.settings().isFamilyEnabled(family)) {
+                families.add(family);
+            }
+        }
         Collections.shuffle(families);
         dailyOrder = families;
         plannedDate = date;

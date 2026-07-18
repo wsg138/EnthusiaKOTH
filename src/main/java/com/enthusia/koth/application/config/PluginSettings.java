@@ -23,17 +23,24 @@ public record PluginSettings(
         boolean scheduleEnabled,
         List<LocalTime> scheduleTimes,
         Map<KothFamily, ArenaDefinition> arenas,
+        Map<KothFamily, Boolean> enabledFamilies,
         Map<KothFamily, ItemRuleSet> defaultRules,
         Map<KothFamily, Double> soloRewards,
         Map<KothFamily, Double> guildRewards,
         boolean discordEnabled,
-        String discordWebhookUrl
+        String discordWebhookUrl,
+        PrivateTestingSettings privateTesting
 ) {
     public PluginSettings {
         scheduleTimes = List.copyOf(scheduleTimes);
         arenas = Map.copyOf(arenas);
+        enabledFamilies = Map.copyOf(enabledFamilies);
         defaultRules = Map.copyOf(defaultRules);
         soloRewards = Map.copyOf(soloRewards);
         guildRewards = Map.copyOf(guildRewards);
+    }
+
+    public boolean isFamilyEnabled(KothFamily family) {
+        return enabledFamilies.getOrDefault(family, false);
     }
 }

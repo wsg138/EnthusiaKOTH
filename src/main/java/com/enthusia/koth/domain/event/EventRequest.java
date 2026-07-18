@@ -1,6 +1,8 @@
 package com.enthusia.koth.domain.event;
 
+import com.enthusia.koth.domain.EventKind;
 import com.enthusia.koth.domain.KothFamily;
+import com.enthusia.koth.domain.PrivateTestAccess;
 import com.enthusia.koth.domain.StartSource;
 import com.enthusia.koth.domain.TeamMode;
 import com.enthusia.koth.domain.rules.ItemRuleSet;
@@ -16,6 +18,12 @@ public record EventRequest(
         UUID requestedBy,
         Instant startAt,
         ItemRuleSet rules,
-        boolean queueIfBusy
+        boolean queueIfBusy,
+        EventKind kind,
+        PrivateTestAccess privateTestAccess,
+        boolean quickTiming
 ) {
+    public boolean isPrivateTest() {
+        return kind == EventKind.PRIVATE_TEST;
+    }
 }

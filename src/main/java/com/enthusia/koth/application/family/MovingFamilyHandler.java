@@ -26,11 +26,13 @@ public final class MovingFamilyHandler implements KothFamilyHandler {
     @Override
     public void start(ActiveEvent event) {
         event.clearScores();
+        event.objectivePosition(event.arena().zone().center());
     }
 
     @Override
     public TickResult tick(ActiveEvent event, Instant now) {
         Location point = movingPoint(event, now);
+        event.objectivePosition(new Position(point.getWorld().getName(), point.getX(), point.getY(), point.getZ()));
         Optional<TeamId> controller = ControllerSelector.singleController(
                 ControllerSelector.teamsAtPoint(event, teamResolver, point));
         controller.ifPresentOrElse(team -> {

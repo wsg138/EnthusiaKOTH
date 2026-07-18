@@ -16,6 +16,7 @@ final class ControllerSelector {
 
     static List<TeamId> teamsInZone(ActiveEvent event, TeamResolver teamResolver) {
         return Bukkit.getOnlinePlayers().stream()
+                .filter(player -> event.isParticipant(player.getUniqueId()))
                 .filter(player -> event.arena().zone().contains(player.getLocation()))
                 .map(player -> teamResolver.resolve(player, event.request().teamMode()))
                 .flatMap(Optional::stream)
@@ -27,6 +28,7 @@ final class ControllerSelector {
         double radius = event.arena().zone().radius();
         double radiusSquared = radius * radius;
         return Bukkit.getOnlinePlayers().stream()
+                .filter(player -> event.isParticipant(player.getUniqueId()))
                 .filter(player -> player.getWorld().equals(point.getWorld()))
                 .filter(player -> player.getLocation().distanceSquared(point) <= radiusSquared)
                 .map(player -> teamResolver.resolve(player, event.request().teamMode()))

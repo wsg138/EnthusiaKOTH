@@ -8,10 +8,13 @@ import com.enthusia.koth.domain.rules.RestrictedItemType;
 import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import org.bukkit.Material;
 import org.bukkit.entity.Player;
+import org.bukkit.entity.Projectile;
+import org.bukkit.projectiles.ProjectileSource;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityToggleGlideEvent;
+import org.bukkit.event.entity.ProjectileLaunchEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.inventory.ItemStack;
 
@@ -30,6 +33,9 @@ public final class RestrictionListener implements Listener {
     @EventHandler(ignoreCancelled = true)
     public void onInteract(PlayerInteractEvent event) {
         activeEvents.activeEvent().ifPresent(active -> {
+            if (!active.isParticipant(event.getPlayer().getUniqueId())) {
+                return;
+            }
             if (!active.arena().zone().contains(event.getPlayer().getLocation())) {
                 return;
             }
@@ -40,20 +46,25 @@ public final class RestrictionListener implements Listener {
                 event.getPlayer().sendActionBar(net.kyori.adventure.text.Component.text(decision.message()));
                 return;
             }
-            if (item != null && item.getType() == Material.ENDER_PEARL) {
-                restrictions.applyCooldown(event.getPlayer(), RestrictedItemType.ENDER_PEARL);
-            } else if (item != null && item.getType() == Material.WIND_CHARGE) {
-                restrictions.applyCooldown(event.getPlayer(), RestrictedItemType.WIND_CHARGE);
-            }
         });
     }
 
     @EventHandler(ignoreCancelled = true)
     public void onDamage(EntityDamageByEntityEvent event) {
-        if (!(event.getDamager() instanceof Player player)) {
+        Player player = damagingPlayer(event);
+        if (player == null) {
             return;
         }
         activeEvents.activeEvent().ifPresent(active -> {
+            if (active.isPrivateTest() && event.getEntity() instanceof Player victim
+                    && isInsideEventArea(active, player, victim)
+                    && active.isParticipant(player.getUniqueId()) != active.isParticipant(victim.getUniqueId())) {
+                event.setCancelled(true);
+                return;
+            }
+            if (!active.isParticipant(player.getUniqueId())) {
+                return;
+            }
             if (!active.arena().zone().contains(player.getLocation())) {
                 return;
             }
@@ -68,12 +79,15 @@ public final class RestrictionListener implements Listener {
         });
     }
 
-    @EventHandler(ignoreCancelled = true)
+    @EventHandler(priority = org.bukkit.event.EventPriority.HIGHEST, ignoreCancelled = false)
     public void onGlide(EntityToggleGlideEvent event) {
         if (!(event.getEntity() instanceof Player player) || !event.isGliding()) {
             return;
         }
         activeEvents.activeEvent().ifPresent(active -> {
+            if (!active.isParticipant(player.getUniqueId())) {
+                return;
+            }
             if (!active.arena().zone().contains(player.getLocation())) {
                 return;
             }
@@ -82,8 +96,49 @@ public final class RestrictionListener implements Listener {
                 event.setCancelled(true);
                 player.sendActionBar(net.kyori.adventure.text.Component.text(decision.message()));
             } else {
+                if (combat.isAvailable()) {
+                    event.setCancelled(false);
+                }
                 combat.allowKothElytraIfSupported(player);
             }
         });
+    }
+
+    @EventHandler(priority = org.bukkit.event.EventPriority.HIGHEST, ignoreCancelled = false)
+    public void onFireworkLaunch(ProjectileLaunchEvent event) {
+        ProjectileSource source = event.getEntity().getShooter();
+        if (!(source instanceof Player player)) {
+            return;
+        }
+        activeEvents.activeEvent().ifPresent(active -> {
+            if (!active.isParticipant(player.getUniqueId()) || !active.arena().zone().contains(player.getLocation())) {
+                return;
+            }
+            if (event.getEntity() instanceof org.bukkit.entity.Firework) {
+                RestrictionDecision decision = restrictions.canUseElytra(player, active);
+                if (decision.allowed() && combat.isAvailable()) {
+                    event.setCancelled(false);
+                }
+            } else if (event.getEntity() instanceof org.bukkit.entity.EnderPearl) {
+                restrictions.applyCooldown(player, RestrictedItemType.ENDER_PEARL);
+            } else if (event.getEntity() instanceof org.bukkit.entity.AbstractWindCharge) {
+                restrictions.applyCooldown(player, RestrictedItemType.WIND_CHARGE);
+            }
+        });
+    }
+
+    private Player damagingPlayer(EntityDamageByEntityEvent event) {
+        if (event.getDamager() instanceof Player player) {
+            return player;
+        }
+        if (event.getDamager() instanceof Projectile projectile) {
+            ProjectileSource shooter = projectile.getShooter();
+            return shooter instanceof Player player ? player : null;
+        }
+        return null;
+    }
+
+    private boolean isInsideEventArea(com.enthusia.koth.domain.event.ActiveEvent event, Player first, Player second) {
+        return event.arena().zone().contains(first.getLocation()) || event.arena().zone().contains(second.getLocation());
     }
 }
