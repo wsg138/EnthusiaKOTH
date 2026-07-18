@@ -226,7 +226,7 @@ public final class ActiveEventService {
             return arena;
         }
         var testing = configuration.settings().privateTesting();
-        return new ArenaDefinition(arena.id(), arena.family(), arena.zone(),
+        return new ArenaDefinition(arena.id(), arena.family(), arena.protectedRegion(), arena.zone(),
                 Math.toIntExact(testing.quickMatchDuration().toSeconds()),
                 arena.family() == com.enthusia.koth.domain.KothFamily.CAPTURE ? testing.quickCaptureSeconds() : arena.captureSeconds(),
                 arena.leaveBehavior(), arena.decayPerSecond(), arena.movingSquareSize(), arena.movingSpeedBlocksPerSecond());

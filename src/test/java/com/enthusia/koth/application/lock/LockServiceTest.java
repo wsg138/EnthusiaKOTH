@@ -31,7 +31,7 @@ final class LockServiceTest {
         private final PluginSettings settings;
 
         private TestConfiguration(LockState lockState) {
-            settings = new PluginSettings(3, ZoneId.of("America/New_York"), Duration.ZERO, 96,
+            settings = new PluginSettings(4, ZoneId.of("America/New_York"), Duration.ZERO,
                     lockState, 0, 0, true, List.of(), Duration.ofMinutes(5),
                     Map.<KothFamily, com.enthusia.koth.domain.ArenaDefinition>of(), Map.of(), Map.of(), Map.of(), Map.of(),
                     false, "", new PrivateTestingSettings(Duration.ZERO, Duration.ofMinutes(2), 15, true));

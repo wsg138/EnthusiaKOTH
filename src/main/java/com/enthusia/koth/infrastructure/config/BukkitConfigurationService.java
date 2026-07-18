@@ -7,6 +7,7 @@ import com.enthusia.koth.domain.ArenaDefinition;
 import com.enthusia.koth.domain.CaptureLeaveBehavior;
 import com.enthusia.koth.domain.CaptureZone;
 import com.enthusia.koth.domain.KothFamily;
+import com.enthusia.koth.domain.KothRegion;
 import com.enthusia.koth.domain.LockState;
 import com.enthusia.koth.domain.MaceRule;
 import com.enthusia.koth.domain.Position;
@@ -27,7 +28,7 @@ import java.util.Locale;
 import java.util.Map;
 
 public final class BukkitConfigurationService implements ConfigurationService {
-    private static final int CURRENT_VERSION = 3;
+    private static final int CURRENT_VERSION = 4;
     private final JavaPlugin plugin;
     private PluginSettings settings;
     private LockState lockState = LockState.UNLOCKED;
@@ -73,7 +74,6 @@ public final class BukkitConfigurationService implements ConfigurationService {
                 config.getInt("config-version", CURRENT_VERSION),
                 parseZoneId(config.getString("general.timezone", "America/New_York")),
                 Duration.ofSeconds(config.getLong("general.manual-start-delay-seconds", 0)),
-                config.getInt("general.active-radius-blocks", 96),
                 lockState,
                 config.getDouble("manual-start.basic-cost", 0.0),
                 config.getDouble("manual-start.advanced-cost", 0.0),
@@ -126,6 +126,12 @@ public final class BukkitConfigurationService implements ConfigurationService {
         if (version < 3) {
             setIfAbsent(config, "schedule.pre-start-warning-seconds", 300);
         }
+        if (version < 4) {
+            double legacyRadius = config.getDouble("general.active-radius-blocks", 32.0);
+            for (KothFamily family : KothFamily.values()) {
+                setIfAbsent(config, "arenas." + family.key() + ".protected-radius", legacyRadius);
+            }
+        }
         if (version < CURRENT_VERSION) {
             config.set("config-version", CURRENT_VERSION);
             plugin.saveConfig();
@@ -149,6 +155,8 @@ public final class BukkitConfigurationService implements ConfigurationService {
         return new ArenaDefinition(
                 family.key() + "-default",
                 family,
+                new KothRegion(family.key() + "-protected", center,
+                        config.getDouble(base + ".protected-radius", 32.0)),
                 new CaptureZone(family.key() + "-zone", center, config.getDouble(base + ".radius", 5.0)),
                 config.getInt(base + ".duration-seconds", 900),
                 config.getInt(base + ".capture-seconds", family == KothFamily.CAPTURE ? 120 : 0),

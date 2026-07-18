@@ -13,6 +13,7 @@ import com.enthusia.koth.application.ports.ArenaRepository;
 import com.enthusia.koth.application.ports.DisplayPort;
 import com.enthusia.koth.application.ports.GuildPort;
 import com.enthusia.koth.application.ports.StatsRepository;
+import com.enthusia.koth.application.protection.KothRegionProtectionService;
 import com.enthusia.koth.application.reward.RewardService;
 import com.enthusia.koth.application.schedule.ScheduleService;
 import com.enthusia.koth.application.team.TeamResolver;
@@ -26,6 +27,7 @@ import com.enthusia.koth.infrastructure.display.DiscordStatusAdapter;
 import com.enthusia.koth.infrastructure.gui.StartGuiService;
 import com.enthusia.koth.infrastructure.integration.LumaGuildsAdapter;
 import com.enthusia.koth.infrastructure.integration.VaultEconomyAdapter;
+import com.enthusia.koth.infrastructure.listener.KothRegionProtectionListener;
 import com.enthusia.koth.infrastructure.placeholder.EnthusiaKothExpansion;
 import com.enthusia.koth.infrastructure.storage.ConfigArenaRepository;
 import com.enthusia.koth.infrastructure.storage.YamlStatsRepository;
@@ -81,6 +83,7 @@ public final class PluginBootstrap {
         activeEvents.attachTask(Bukkit.getScheduler().runTaskTimer(plugin, activeEvents::tick, 20L, 20L));
         schedule.attachTask(Bukkit.getScheduler().runTaskTimer(plugin, schedule::tick, 20L, 20L));
         Bukkit.getPluginManager().registerEvents(gui, plugin);
+        Bukkit.getPluginManager().registerEvents(new KothRegionProtectionListener(new KothRegionProtectionService(config)), plugin);
         registerCommand();
         registerPlaceholderApi();
     }

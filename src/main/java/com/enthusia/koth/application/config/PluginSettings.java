@@ -15,7 +15,6 @@ public record PluginSettings(
         int configVersion,
         ZoneId scheduleZone,
         Duration manualStartDelay,
-        int activeRadiusBlocks,
         LockState lockState,
         double basicStartCost,
         double advancedStartCost,

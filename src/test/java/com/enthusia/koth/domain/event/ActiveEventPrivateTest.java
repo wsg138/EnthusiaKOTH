@@ -6,6 +6,7 @@ import com.enthusia.koth.domain.CaptureZone;
 import com.enthusia.koth.domain.EventKind;
 import com.enthusia.koth.domain.EventState;
 import com.enthusia.koth.domain.KothFamily;
+import com.enthusia.koth.domain.KothRegion;
 import com.enthusia.koth.domain.Position;
 import com.enthusia.koth.domain.PrivateTestAccess;
 import com.enthusia.koth.domain.StartSource;
@@ -47,6 +48,7 @@ final class ActiveEventPrivateTest {
                 StartSource.PRIVATE_TEST, owner, now, ItemRuleSet.permissive(), false, kind,
                 PrivateTestAccess.PERMISSION_JOIN, true);
         ArenaDefinition arena = new ArenaDefinition("capture", KothFamily.CAPTURE,
+                new KothRegion("protected", new Position("world", 0.5, 80, 0.5), 32),
                 new CaptureZone("zone", new Position("world", 0.5, 80, 0.5), 5),
                 120, 15, CaptureLeaveBehavior.RESET, 1, 20, 1);
         return new ActiveEvent(UUID.randomUUID(), request, arena, now, now.plusSeconds(120));
