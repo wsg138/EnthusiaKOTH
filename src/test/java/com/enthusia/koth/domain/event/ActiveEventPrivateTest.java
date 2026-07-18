@@ -48,7 +48,7 @@ final class ActiveEventPrivateTest {
                 StartSource.PRIVATE_TEST, owner, now, ItemRuleSet.permissive(), false, kind,
                 PrivateTestAccess.PERMISSION_JOIN, true);
         ArenaDefinition arena = new ArenaDefinition("capture", KothFamily.CAPTURE,
-                new KothRegion("protected", new Position("world", 0.5, 80, 0.5), 32),
+                new KothRegion("protected", new Position("world", -32, -64, -32), new Position("world", 32, 320, 32)),
                 new CaptureZone("zone", new Position("world", 0.5, 80, 0.5), 5),
                 120, 15, CaptureLeaveBehavior.RESET, 1, 20, 1);
         return new ActiveEvent(UUID.randomUUID(), request, arena, now, now.plusSeconds(120));

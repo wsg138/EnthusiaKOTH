@@ -16,6 +16,7 @@ import com.enthusia.koth.application.ports.StatsRepository;
 import com.enthusia.koth.application.protection.KothRegionProtectionService;
 import com.enthusia.koth.application.reward.RewardService;
 import com.enthusia.koth.application.schedule.ScheduleService;
+import com.enthusia.koth.application.setup.ArenaSetupService;
 import com.enthusia.koth.application.team.TeamResolver;
 import com.enthusia.koth.application.testing.PrivateTestService;
 import com.enthusia.koth.infrastructure.command.EkothCommand;
@@ -117,7 +118,8 @@ public final class PluginBootstrap {
         if (command == null) {
             throw new IllegalStateException("Command /ekoth is missing from plugin.yml");
         }
-        EkothCommand executor = new EkothCommand(config, activeEvents, schedule, locks, gui, privateTests, this::reload);
+        EkothCommand executor = new EkothCommand(config, activeEvents, schedule, locks, gui, privateTests,
+                new ArenaSetupService(config), this::reload);
         command.setExecutor(executor);
         command.setTabCompleter(executor);
     }

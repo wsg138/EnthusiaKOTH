@@ -4,10 +4,12 @@ import com.enthusia.koth.application.config.ConfigurationService;
 import com.enthusia.koth.application.event.ActiveEventService;
 import com.enthusia.koth.application.lock.LockService;
 import com.enthusia.koth.application.schedule.ScheduleService;
+import com.enthusia.koth.application.setup.ArenaSetupService;
 import com.enthusia.koth.application.testing.PrivateTestService;
 import com.enthusia.koth.domain.KothFamily;
 import com.enthusia.koth.domain.EventKind;
 import com.enthusia.koth.domain.PrivateTestAccess;
+import com.enthusia.koth.domain.Position;
 import com.enthusia.koth.domain.LockState;
 import com.enthusia.koth.domain.StartSource;
 import com.enthusia.koth.domain.TeamMode;
@@ -35,24 +37,27 @@ public final class EkothCommand implements CommandExecutor, TabCompleter {
     private final LockService locks;
     private final StartGuiService gui;
     private final PrivateTestService privateTests;
+    private final ArenaSetupService arenaSetup;
     private final Runnable reloadAction;
 
     @SuppressFBWarnings(value = "EI_EXPOSE_REP2", justification = "Command adapter holds application services supplied by bootstrap.")
     public EkothCommand(ConfigurationService config, ActiveEventService activeEvents, ScheduleService schedule,
-                        LockService locks, StartGuiService gui, PrivateTestService privateTests, Runnable reloadAction) {
+                        LockService locks, StartGuiService gui, PrivateTestService privateTests, ArenaSetupService arenaSetup,
+                        Runnable reloadAction) {
         this.config = config;
         this.activeEvents = activeEvents;
         this.schedule = schedule;
         this.locks = locks;
         this.gui = gui;
         this.privateTests = privateTests;
+        this.arenaSetup = arenaSetup;
         this.reloadAction = reloadAction;
     }
 
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (args.length == 0) {
-            sender.sendMessage(Component.text("/ekoth start | test | status | doctor | reload | lock <manual|all|off> | cancel"));
+            sender.sendMessage(Component.text("/ekoth start | test | arena | status | doctor | reload | lock <manual|all|off> | cancel"));
             return true;
         }
         handleSubcommand(sender, args);
@@ -64,6 +69,7 @@ public final class EkothCommand implements CommandExecutor, TabCompleter {
             case "start" -> start(sender);
             case "startadmin" -> startAdmin(sender, args);
             case "test" -> test(sender, args);
+            case "arena" -> arena(sender, args);
             case "status" -> status(sender);
             case "doctor" -> doctor(sender);
             case "reload" -> reload(sender);
@@ -204,6 +210,52 @@ public final class EkothCommand implements CommandExecutor, TabCompleter {
         player.sendMessage(Component.text(privateTests.join(player).message()));
     }
 
+    private void arena(CommandSender sender, String[] args) {
+        if (!requireAdmin(sender)) return;
+        if (!(sender instanceof Player player)) {
+            sender.sendMessage(Component.text("Arena setup must be run by a player."));
+            return;
+        }
+        if (args.length < 3) {
+            player.sendMessage(Component.text("/ekoth arena corner1|corner2 <capture|moving|conquest>"));
+            player.sendMessage(Component.text("/ekoth arena setregion <family> <x1> <y1> <z1> <x2> <y2> <z2>"));
+            return;
+        }
+        var family = KothFamily.fromKey(args[2]);
+        if (family.isEmpty()) {
+            player.sendMessage(Component.text("Unknown KOTH family."));
+            return;
+        }
+        switch (args[1].toLowerCase(Locale.ROOT)) {
+            case "corner1", "corner2" -> saveCorner(player, family.get(), args[1].equalsIgnoreCase("corner1"));
+            case "setregion" -> setRegion(player, family.get(), args);
+            default -> player.sendMessage(Component.text("Usage: /ekoth arena corner1|corner2 <family>"));
+        }
+    }
+
+    private void saveCorner(Player player, KothFamily family, boolean firstCorner) {
+        var existing = config.settings().arenas().get(family).protectedRegion();
+        Position position = new Position(player.getWorld().getName(), player.getLocation().getBlockX(),
+                player.getLocation().getBlockY(), player.getLocation().getBlockZ());
+        Position first = firstCorner ? position : new Position(position.world(), existing.first().x(), existing.first().y(), existing.first().z());
+        Position second = firstCorner ? new Position(position.world(), existing.second().x(), existing.second().y(), existing.second().z()) : position;
+        player.sendMessage(Component.text(arenaSetup.saveProtectedRegion(family, first, second).message()));
+    }
+
+    private void setRegion(Player player, KothFamily family, String[] args) {
+        if (args.length != 9) {
+            player.sendMessage(Component.text("Usage: /ekoth arena setregion <family> <x1> <y1> <z1> <x2> <y2> <z2>"));
+            return;
+        }
+        try {
+            Position first = new Position(player.getWorld().getName(), Double.parseDouble(args[3]), Double.parseDouble(args[4]), Double.parseDouble(args[5]));
+            Position second = new Position(player.getWorld().getName(), Double.parseDouble(args[6]), Double.parseDouble(args[7]), Double.parseDouble(args[8]));
+            player.sendMessage(Component.text(arenaSetup.saveProtectedRegion(family, first, second).message()));
+        } catch (NumberFormatException ex) {
+            player.sendMessage(Component.text("Protected-region coordinates must be valid numbers."));
+        }
+    }
+
     private void lock(CommandSender sender, String[] args) {
         if (!requireAdmin(sender)) return;
         if (args.length < 2) {
@@ -245,7 +297,7 @@ public final class EkothCommand implements CommandExecutor, TabCompleter {
     @Override
     public List<String> onTabComplete(CommandSender sender, Command command, String label, String[] args) {
         if (args.length == 1) {
-            return filter(List.of("start", "startadmin", "test", "status", "doctor", "reload", "lock", "cancel"), args[0]);
+            return filter(List.of("start", "startadmin", "test", "arena", "status", "doctor", "reload", "lock", "cancel"), args[0]);
         }
         if (args.length == 2 && args[0].equalsIgnoreCase("test")) {
             return filter(List.of("start", "join", "leave", "cancel"), args[1]);
@@ -270,6 +322,12 @@ public final class EkothCommand implements CommandExecutor, TabCompleter {
         }
         if (args.length == 2 && args[0].equalsIgnoreCase("lock")) {
             return filter(List.of("manual", "all", "off"), args[1]);
+        }
+        if (args.length == 2 && args[0].equalsIgnoreCase("arena")) {
+            return filter(List.of("corner1", "corner2", "setregion"), args[1]);
+        }
+        if (args.length == 3 && args[0].equalsIgnoreCase("arena")) {
+            return filter(List.of("capture", "moving", "conquest"), args[2]);
         }
         return List.of();
     }

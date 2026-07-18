@@ -5,6 +5,7 @@ import com.enthusia.koth.application.config.PluginSettings;
 import com.enthusia.koth.application.config.PrivateTestingSettings;
 import com.enthusia.koth.domain.KothFamily;
 import com.enthusia.koth.domain.LockState;
+import com.enthusia.koth.domain.Position;
 import com.enthusia.koth.domain.StartSource;
 import org.junit.jupiter.api.Test;
 
@@ -31,7 +32,7 @@ final class LockServiceTest {
         private final PluginSettings settings;
 
         private TestConfiguration(LockState lockState) {
-            settings = new PluginSettings(4, ZoneId.of("America/New_York"), Duration.ZERO,
+            settings = new PluginSettings(5, ZoneId.of("America/New_York"), Duration.ZERO,
                     lockState, 0, 0, true, List.of(), Duration.ofMinutes(5),
                     Map.<KothFamily, com.enthusia.koth.domain.ArenaDefinition>of(), Map.of(), Map.of(), Map.of(), Map.of(),
                     false, "", new PrivateTestingSettings(Duration.ZERO, Duration.ofMinutes(2), 15, true));
@@ -40,6 +41,7 @@ final class LockServiceTest {
         @Override public PluginSettings settings() { return settings; }
         @Override public void setLockState(LockState state) { }
         @Override public void saveLockState() { }
+        @Override public void saveProtectedRegion(KothFamily family, Position first, Position second) { }
         @Override public void reload() { }
     }
 }

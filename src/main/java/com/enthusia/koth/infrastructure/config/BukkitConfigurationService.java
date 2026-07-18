@@ -28,7 +28,7 @@ import java.util.Locale;
 import java.util.Map;
 
 public final class BukkitConfigurationService implements ConfigurationService {
-    private static final int CURRENT_VERSION = 4;
+    private static final int CURRENT_VERSION = 5;
     private final JavaPlugin plugin;
     private PluginSettings settings;
     private LockState lockState = LockState.UNLOCKED;
@@ -113,6 +113,16 @@ public final class BukkitConfigurationService implements ConfigurationService {
         reload();
     }
 
+    @Override
+    public void saveProtectedRegion(KothFamily family, Position first, Position second) {
+        String base = "arenas." + family.key();
+        plugin.getConfig().set(base + ".world", first.world());
+        savePosition(base + ".protected-region.corner-1", first);
+        savePosition(base + ".protected-region.corner-2", second);
+        plugin.saveConfig();
+        reload();
+    }
+
     private void migrate(FileConfiguration config) {
         int version = config.getInt("config-version", 0);
         if (version < 2) {
@@ -132,6 +142,21 @@ public final class BukkitConfigurationService implements ConfigurationService {
                 setIfAbsent(config, "arenas." + family.key() + ".protected-radius", legacyRadius);
             }
         }
+        if (version < 5) {
+            for (KothFamily family : KothFamily.values()) {
+                String base = "arenas." + family.key();
+                double centerX = config.getDouble(base + ".center.x", 0.5);
+                double centerY = config.getDouble(base + ".center.y", 80.0);
+                double centerZ = config.getDouble(base + ".center.z", 0.5);
+                double radius = config.getDouble(base + ".protected-radius", 32.0);
+                setIfAbsent(config, base + ".protected-region.corner-1.x", centerX - radius);
+                setIfAbsent(config, base + ".protected-region.corner-1.y", centerY - 64.0);
+                setIfAbsent(config, base + ".protected-region.corner-1.z", centerZ - radius);
+                setIfAbsent(config, base + ".protected-region.corner-2.x", centerX + radius);
+                setIfAbsent(config, base + ".protected-region.corner-2.y", centerY + 64.0);
+                setIfAbsent(config, base + ".protected-region.corner-2.z", centerZ + radius);
+            }
+        }
         if (version < CURRENT_VERSION) {
             config.set("config-version", CURRENT_VERSION);
             plugin.saveConfig();
@@ -144,6 +169,22 @@ public final class BukkitConfigurationService implements ConfigurationService {
         }
     }
 
+    private Position loadPosition(FileConfiguration config, String path, Position fallback,
+                                  double fallbackX, double fallbackY, double fallbackZ) {
+        return new Position(
+                fallback.world(),
+                config.getDouble(path + ".x", fallbackX),
+                config.getDouble(path + ".y", fallbackY),
+                config.getDouble(path + ".z", fallbackZ)
+        );
+    }
+
+    private void savePosition(String path, Position position) {
+        plugin.getConfig().set(path + ".x", position.x());
+        plugin.getConfig().set(path + ".y", position.y());
+        plugin.getConfig().set(path + ".z", position.z());
+    }
+
     private ArenaDefinition loadArena(FileConfiguration config, KothFamily family) {
         String base = "arenas." + family.key();
         Position center = new Position(
@@ -152,11 +193,14 @@ public final class BukkitConfigurationService implements ConfigurationService {
                 config.getDouble(base + ".center.y", 80.0),
                 config.getDouble(base + ".center.z", 0.5)
         );
+        Position protectedFirst = loadPosition(config, base + ".protected-region.corner-1", center,
+                center.x() - 32.0, center.y() - 64.0, center.z() - 32.0);
+        Position protectedSecond = loadPosition(config, base + ".protected-region.corner-2", center,
+                center.x() + 32.0, center.y() + 64.0, center.z() + 32.0);
         return new ArenaDefinition(
                 family.key() + "-default",
                 family,
-                new KothRegion(family.key() + "-protected", center,
-                        config.getDouble(base + ".protected-radius", 32.0)),
+                new KothRegion(family.key() + "-protected", protectedFirst, protectedSecond),
                 new CaptureZone(family.key() + "-zone", center, config.getDouble(base + ".radius", 5.0)),
                 config.getInt(base + ".duration-seconds", 900),
                 config.getInt(base + ".capture-seconds", family == KothFamily.CAPTURE ? 120 : 0),

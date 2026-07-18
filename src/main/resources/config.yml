@@ -1,4 +1,4 @@
-config-version: 4
+config-version: 5
 
 general:
   timezone: "America/New_York"
@@ -39,7 +39,9 @@ arenas:
     enabled: true
     world: "world"
     center: { x: 0.5, y: 80.0, z: 0.5 }
-    protected-radius: 32.0
+    protected-region:
+      corner-1: { x: -32.0, y: -64.0, z: -32.0 }
+      corner-2: { x: 32.0, y: 320.0, z: 32.0 }
     radius: 5.0
     duration-seconds: 900
     capture-seconds: 120
@@ -49,14 +51,18 @@ arenas:
     enabled: true
     world: "world"
     center: { x: 40.5, y: 80.0, z: 40.5 }
-    protected-radius: 32.0
+    protected-region:
+      corner-1: { x: 8.5, y: -64.0, z: 8.5 }
+      corner-2: { x: 72.5, y: 320.0, z: 72.5 }
     radius: 5.0
     duration-seconds: 900
     square-size: 20.0
     speed-blocks-per-second: 1.0
   conquest:
     enabled: false
-    protected-radius: 48.0
+    protected-region:
+      corner-1: { x: -48.0, y: -64.0, z: -48.0 }
+      corner-2: { x: 48.0, y: 320.0, z: 48.0 }
     duration-seconds: 1200
     max-extensions: 10
     extension-seconds: 60
