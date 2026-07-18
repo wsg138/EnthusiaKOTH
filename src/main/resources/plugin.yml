@@ -12,7 +12,7 @@ commands:
     permission: enthusiakoth.command
 permissions:
   enthusiakoth.command:
-    default: true
+    default: false
   enthusiakoth.start.basic:
     default: false
   enthusiakoth.start.advanced:
@@ -20,9 +20,14 @@ permissions:
   enthusiakoth.admin:
     default: op
     children:
+      enthusiakoth.command: true
       enthusiakoth.test.start: true
       enthusiakoth.test.join: true
   enthusiakoth.test.start:
     default: op
+    children:
+      enthusiakoth.command: true
   enthusiakoth.test.join:
     default: false
+    children:
+      enthusiakoth.command: true
