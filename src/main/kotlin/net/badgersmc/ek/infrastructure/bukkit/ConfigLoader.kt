@@ -19,7 +19,11 @@ class ConfigLoader(private val plugin: JavaPlugin) {
     fun load(): EnthusiaKothConfig {
         val config = plugin.config
         return EnthusiaKothConfig(
-            timezone = ZoneId.of(config.getString("general.timezone", "America/New_York")),
+            timezone = runCatching { ZoneId.of(config.getString("general.timezone", "America/New_York")) }
+                .getOrElse {
+                    plugin.logger.warning("EnthusiaKOTH: invalid general.timezone '${config.getString("general.timezone")}', falling back to America/New_York")
+                    ZoneId.of("America/New_York")
+                },
             manualStart = ManualStartConfigLoader.load(config),
             schedule = ScheduleConfigLoader.load(config),
             flares = FlareConfigLoader.load(config),
@@ -43,8 +47,16 @@ class ConfigLoader(private val plugin: JavaPlugin) {
                 Bukkit.getLogger().warning("EnthusiaKOTH: World '${ac.world}' not found for arena '$id'")
                 return@mapNotNull null
             }
-            val c1 = Location(world, ac.protectedRegion.corner1.x, ac.protectedRegion.corner1.y, ac.protectedRegion.corner1.z)
-            val c2 = Location(world, ac.protectedRegion.corner2.x, ac.protectedRegion.corner2.y, ac.protectedRegion.corner2.z)
+            // Capture/moving zone is derived from center + radius (NOT the
+            // protected-region cuboid, which is the much larger protection
+            // boundary). Using protected-region corners made players able to
+            // capture from anywhere in a 64×384×64 box.
+            val isMoving = ac.family.equals("moving", ignoreCase = true)
+            // MOVING: the zone bounds the roaming path (square), capture radius
+            // is applied per-point. CAPTURE/CONQUEST: zone = center ± radius.
+            val half = if (isMoving) ac.movingSquareSize / 2.0 else ac.radius
+            val c1 = Location(world, ac.center.x - half, ac.center.y - ac.radius, ac.center.z - half)
+            val c2 = Location(world, ac.center.x + half, ac.center.y + ac.radius, ac.center.z + half)
             val zone = CaptureZone(id = id, worldName = ac.world, corner1 = c1, corner2 = c2, radius = ac.radius)
             id to KothArena(
                 id = id,
@@ -52,7 +64,11 @@ class ConfigLoader(private val plugin: JavaPlugin) {
                 zone = zone,
                 durationSeconds = ac.durationSeconds,
                 captureSeconds = ac.captureSeconds,
-                leaveBehavior = CaptureLeaveBehavior.valueOf(ac.leaveBehavior.uppercase()),
+                leaveBehavior = runCatching { CaptureLeaveBehavior.valueOf(ac.leaveBehavior.uppercase()) }
+                    .getOrElse {
+                        plugin.logger.warning("EnthusiaKOTH: invalid leave-behavior '${ac.leaveBehavior}' for arena '$id', falling back to RESET")
+                        CaptureLeaveBehavior.RESET
+                    },
                 decayPerSecond = ac.decayPerSecond,
                 movingSquareSize = ac.movingSquareSize,
                 movingSpeedBlocksPerSecond = ac.movingSpeedBlocksPerSecond,
@@ -172,13 +188,32 @@ private object ArenaConfigLoader {
                 schedule = cl(base, "schedule"),
                 rewards = cl(base, "rewards"),
                 chancedRewards = loadChanced(base, "chanced-rewards"),
+                captureSpeedBonuses = loadIntDoubleMap(base, "capture-speed-bonuses"),
             )
         }
     }
 
     private fun loadChanced(c: ConfigurationSection, path: String): Map<String, Double> {
         val sec = cs(c, path) ?: return emptyMap()
-        return sec.getKeys(false).associateWith { cdd(sec, it, 0.0) }
+        // YAML schema: percentage -> command ("20.0": "bank 50")
+        // Model: command -> chance percentage (Map<String, Double>)
+        return buildMap {
+            for (key in sec.getKeys(false)) {
+                val command = sec.getString(key) ?: continue
+                val chance = key.toDoubleOrNull() ?: continue
+                put(command, chance)
+            }
+        }
+    }
+
+    private fun loadIntDoubleMap(c: ConfigurationSection, path: String): Map<Int, Double> {
+        val sec = cs(c, path) ?: return emptyMap()
+        return buildMap {
+            for (key in sec.getKeys(false)) {
+                val count = key.toIntOrNull() ?: continue
+                put(count, cdd(sec, key, 1.0))
+            }
+        }
     }
 }
 

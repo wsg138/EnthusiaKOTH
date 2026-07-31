@@ -23,6 +23,7 @@ class KothEvent(
     @Volatile var previousControllerTime: Double = 0.0
     @Volatile var movingPoint: Triple<Double, Double, Double>? = null
     @Volatile var movingStartEpoch: Long = 0
+    @Volatile var leaveAnnouncedFor: TeamId? = null
 
     fun isParticipant(playerId: UUID): Boolean = !isPrivateTest || playerId in participants || playerId == owner
     fun join(playerId: UUID): Boolean = participants.add(playerId)

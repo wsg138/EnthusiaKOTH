@@ -18,6 +18,7 @@ class FlareService(
     private val cfgLoader: () -> EnthusiaKothConfig,
     private val kothService: KothService,
     private val arenas: () -> Map<String, KothArena>,
+    private val lang: net.badgersmc.nexus.i18n.LangService,
 ) {
     companion object {
         val FLARE_KOTH_KEY = NamespacedKey("ekoth", "koth-flare")
@@ -49,36 +50,33 @@ class FlareService(
     fun handleFlareUse(player: Player, item: ItemStack): Boolean {
         val kothName = getFlareKothName(item) ?: return false
         val arena = arenas()[kothName] ?: return false
-        val cfg = cfgLoader()
 
         if (arena.flaresMustBePlacedOnCap && !arena.zone.contains(player.location)) {
-            player.sendMessage(cfg.flares.messages.notInRegion
-                .replace("{KOTH}", kothName).toComponent())
+            player.sendMessage(lang.msg("flare.not_in_region", "koth" to kothName))
             return true
         }
 
         if (kothService.activeEvent != null) {
-            player.sendMessage(cfg.flares.messages.alreadyActive
-                .replace("{KOTH}", kothName).toComponent())
+            player.sendMessage(lang.msg("flare.already_active", "koth" to kothName))
             return true
         }
+
+        // Only consume the flare if the event actually starts
+        val started = kothService.startEvent(arena)
+        if (!started) return true
 
         item.amount -= 1
         if (item.amount <= 0) {
             player.inventory.setItemInMainHand(null)
         }
 
-        kothService.startEvent(arena)
-
-        player.sendMessage(cfg.flares.messages.startedWithFlare
-            .replace("{KOTH}", kothName).toComponent())
+        player.sendMessage(lang.msg("flare.started", "koth" to kothName))
         val loc = arena.zone.center(player.world)
         Bukkit.broadcast(
-            cfg.flares.messages.startedBroadcast
-                .replace("{KOTH}", kothName)
-                .replace("{PLAYER}", player.name)
-                .replace("{LOCATION}", "${loc.blockX}, ${loc.blockY}, ${loc.blockZ}")
-                .toComponent()
+            lang.msg("flare.started_broadcast",
+                "player" to player.name,
+                "koth" to kothName,
+                "location" to "${loc.blockX}, ${loc.blockY}, ${loc.blockZ}")
         )
         return true
     }

@@ -17,9 +17,20 @@ import java.util.*
  */
 class LumaGuildsAdapter {
 
-    private val lookup: GuildLookup? by lazy {
-        Bukkit.getServicesManager().load(GuildLookup::class.java)
-    }
+    private var cached: GuildLookup? = null
+
+    /**
+     * Resolves GuildLookup from the ServicesManager, retrying on each call if
+     * LumaGuilds hadn't registered it yet (avoid permanently caching a null).
+     */
+    private val lookup: GuildLookup?
+        get() {
+            val existing = cached
+            if (existing != null) return existing
+            return Bukkit.getServicesManager().load(GuildLookup::class.java).also { loaded ->
+                if (loaded != null) cached = loaded
+            }
+        }
 
     fun isAvailable(): Boolean = lookup != null
 

@@ -21,6 +21,10 @@ import org.joml.Vector3f
  */
 class ZoneBorderService(private val plugin: JavaPlugin) {
 
+    companion object {
+        const val BORDER_TAG = "ekoth_zone_border"
+    }
+
     private val activeBorders = mutableListOf<BlockDisplay>()
 
     /** Show the border for a zone. Clears any previous border first. */
@@ -29,11 +33,14 @@ class ZoneBorderService(private val plugin: JavaPlugin) {
         val world = plugin.server.getWorld(zone.worldName) ?: return
         val y = zone.minY + 0.1 // just above ground
 
+        // Sweep leftover border entities from a previous unclean shutdown
+        world.entities.filter { it.scoreboardTags.contains(BORDER_TAG) }.forEach { it.remove() }
+
         // Four edges: north, east, south (reversed), west (reversed)
-        spawnEdge(world, zone.minX, y, zone.minZ, zone.maxX, y, zone.minZ)
-        spawnEdge(world, zone.maxX, y, zone.minZ, zone.maxX, y, zone.maxZ)
-        spawnEdge(world, zone.maxX, y, zone.maxZ, zone.minX, y, zone.maxZ)
-        spawnEdge(world, zone.minX, y, zone.maxZ, zone.minX, y, zone.minZ)
+        spawnEdge(world, zone.minX, y, zone.minZ, zone.maxX, zone.minZ)
+        spawnEdge(world, zone.maxX, y, zone.minZ, zone.maxX, zone.maxZ)
+        spawnEdge(world, zone.maxX, y, zone.maxZ, zone.minX, zone.maxZ)
+        spawnEdge(world, zone.minX, y, zone.maxZ, zone.minX, zone.minZ)
     }
 
     /** Remove the border. Safe to call multiple times. */
@@ -47,7 +54,7 @@ class ZoneBorderService(private val plugin: JavaPlugin) {
      * The display is scaled paper-thin (0.005) so it renders as a glowing wireframe line
      * — identical to the WorldEdit CUI cuboid render aesthetic.
      */
-    private fun spawnEdge(world: org.bukkit.World, x1: Double, y: Double, z1: Double, x2: Double, y2: Double, z2: Double) {
+    private fun spawnEdge(world: org.bukkit.World, x1: Double, y: Double, z1: Double, x2: Double, z2: Double) {
         val midX = (x1 + x2) / 2.0
         val midZ = (z1 + z2) / 2.0
         val loc = Location(world, midX, y, midZ)
@@ -66,15 +73,23 @@ class ZoneBorderService(private val plugin: JavaPlugin) {
             d.setViewRange(64f)
             d.setShadowStrength(0.0f)
             d.setBrightness(Display.Brightness(15, 15))
+            // Don't persist border entities with chunks — unclean shutdowns
+            // would otherwise leave permanent glowing blocks in the world.
+            d.isPersistent = false
+            d.addScoreboardTag(BORDER_TAG)
         }
 
-        // Transform the block into a paper-thin wire — the glow outline is
-        // what the player actually sees, not the block texture itself
+        // Transformation = Translation * LeftRotation * Scale * RightRotation.
+        // The yaw must be the LEFT rotation so it is applied AFTER the non-uniform
+        // scale (length × 0.005 × 0.005); as the right rotation it would rotate the
+        // block first and then flatten it to the local X axis, distorting the edge.
+        // The block display model is centered on the entity origin, so the scaled
+        // edge is already centered at the edge midpoint — no translation offset needed.
         display.transformation = org.bukkit.util.Transformation(
             Vector3f(0f, 0f, 0f),
-            Quaternionf(),
-            Vector3f(length.toFloat(), 0.005f, 0.005f),  // paper-thin line
             Quaternionf().rotateY(yaw),
+            Vector3f(length.toFloat(), 0.005f, 0.005f),  // paper-thin line
+            Quaternionf(),
         )
 
         display.setRotation(0f, 0f)

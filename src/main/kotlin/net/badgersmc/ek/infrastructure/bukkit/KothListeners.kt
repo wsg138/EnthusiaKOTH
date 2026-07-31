@@ -43,7 +43,13 @@ class KothListeners(
         val title = PlainTextComponentSerializer.plainText().serialize(event.view.title())
         if (title.contains("KOTHs")) {
             event.isCancelled = true
-            if (event.whoClicked is org.bukkit.entity.Player && event.slot >= 0) {
+            // Only handle clicks in the GUI itself — clicks in the player's own
+            // inventory (bottom) have slots relative to that inventory and must
+            // never be treated as GUI slot indexes.
+            if (event.clickedInventory == event.view.topInventory
+                && event.whoClicked is org.bukkit.entity.Player
+                && event.slot >= 0
+            ) {
                 command.handleGuiClick(event.whoClicked as org.bukkit.entity.Player, event.slot)
             }
         }

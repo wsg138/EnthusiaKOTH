@@ -96,8 +96,10 @@ class RestrictionService(
         return when (item.type) {
             Material.MACE -> when (rules.maceRule) {
                 MaceRule.FULLY_DISABLED -> RestrictionDecision.denied("Mace damage is disabled for this KOTH.")
-                MaceRule.BREACH_DISABLED -> RestrictionDecision.allowed(rules.maceCooldownSeconds)
-                MaceRule.DENSITY_DISABLED -> RestrictionDecision.allowed(rules.maceCooldownSeconds)
+                // Base damage allowed but still subject to the per-item cooldown —
+                // route through decision() so remainingCooldown is enforced.
+                MaceRule.BREACH_DISABLED -> decision(player, event, RestrictedItemType.MACE)
+                MaceRule.DENSITY_DISABLED -> decision(player, event, RestrictedItemType.MACE)
                 MaceRule.FULLY_ALLOWED -> decision(player, event, RestrictedItemType.MACE)
             }
 
@@ -179,15 +181,15 @@ class RestrictionService(
     }
 
     companion object {
-        private val SPEARS: Set<Material> = setOf(
-            Material.WOODEN_SPEAR,
-            Material.STONE_SPEAR,
-            Material.COPPER_SPEAR,
-            Material.IRON_SPEAR,
-            Material.GOLDEN_SPEAR,
-            Material.DIAMOND_SPEAR,
-            Material.NETHERITE_SPEAR,
-        )
+        /**
+         * Spear materials resolved by name at runtime — the constants aren't part of
+         * the vanilla Paper Material enum, so referencing them statically would break
+         * compilation against artifacts that lack them. Unknown materials are skipped.
+         */
+        private val SPEARS: Set<Material> = listOf(
+            "WOODEN_SPEAR", "STONE_SPEAR", "COPPER_SPEAR", "IRON_SPEAR",
+            "GOLDEN_SPEAR", "DIAMOND_SPEAR", "NETHERITE_SPEAR",
+        ).mapNotNull { runCatching { Material.getMaterial(it) }.getOrNull() }.toSet()
 
         private val typeFor: (Material) -> RestrictedItemType? = { material ->
             when (material) {

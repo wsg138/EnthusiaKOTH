@@ -26,14 +26,12 @@ import net.badgersmc.ek.infrastructure.restriction.RestrictionService
 import net.badgersmc.ek.infrastructure.restriction.RuleSet
 import org.bukkit.Bukkit
 import org.bukkit.command.Command
-import org.bukkit.command.CommandMap
-import org.bukkit.plugin.SimplePluginManager
 import java.io.File
 import javax.sql.DataSource
 import net.badgersmc.nexus.i18n.LangService
 import net.badgersmc.nexus.i18n.Locale as NexusLocale
 
-class ServiceModule(plugin: EnthusiaKothPlugin) {
+class ServiceModule(private val plugin: EnthusiaKothPlugin) {
 
     private val configLoader = ConfigLoader(plugin)
 
@@ -79,7 +77,13 @@ class ServiceModule(plugin: EnthusiaKothPlugin) {
     val zoneBorderService = ZoneBorderService(plugin)
 
     val restrictionService = RestrictionService(
-        rulesForArena = { arenaId -> config().rules.rules[arenaId] ?: RuleSet.PERMISSIVE },
+        // Rules are configured per FAMILY (rules.defaults.<family>), so resolve
+        // the arena's family first — an arena named differently from its family
+        // (e.g. "capture_north") must not silently fall back to PERMISSIVE.
+        rulesForArena = { arenaId ->
+            val family = arenas()[arenaId]?.family?.lowercase() ?: arenaId.lowercase()
+            config().rules.rules[family] ?: RuleSet.PERMISSIVE
+        },
     )
 
     val displayService = DisplayService(plugin, langService)
@@ -106,6 +110,7 @@ class ServiceModule(plugin: EnthusiaKothPlugin) {
         cfgLoader = { config() },
         kothService = kothService,
         arenas = { arenas() },
+        lang = langService,
     )
 
     val kothCommand = KothCommand(
@@ -120,19 +125,7 @@ class ServiceModule(plugin: EnthusiaKothPlugin) {
         arenas = { arenas() },
         reloadAction = { reload() },
     ).also { cmd ->
-        val commandMap = try {
-            val f = SimplePluginManager::class.java.getDeclaredField("commandMap")
-            f.isAccessible = true; f.get(Bukkit.getPluginManager()) as CommandMap
-        } catch (_: Exception) {
-            return@also
-        }
-        val registered = object : org.bukkit.command.Command("ekoth", "EnthusiaKOTH command", "/ekoth <subcommand>", listOf("koth")) {
-            override fun execute(sender: org.bukkit.command.CommandSender, label: String, args: Array<String>): Boolean =
-                cmd.onCommand(sender, this, label, args)
-            override fun tabComplete(sender: org.bukkit.command.CommandSender, alias: String, args: Array<String>): MutableList<String> =
-                cmd.onTabComplete(sender, this, alias, args) ?: mutableListOf()
-        }
-        commandMap.register("enthusiakoth", registered)
+        registerCommand(cmd)
     }
 
     val kothListeners = KothListeners(
@@ -173,5 +166,28 @@ class ServiceModule(plugin: EnthusiaKothPlugin) {
         if (Bukkit.getPluginManager().getPlugin("PlaceholderAPI") != null) {
             it.register()
         }
+    }
+
+    /**
+     * Registers /ekoth through the public command API (Paper's Bukkit.getCommandMap())
+     * instead of reflecting into SimplePluginManager's private field.
+     */
+    private fun registerCommand(cmd: KothCommand) {
+        val commandMap = Bukkit.getCommandMap() ?: run {
+            plugin.logger.warning("EnthusiaKOTH: no CommandMap available — /ekoth not registered")
+            return
+        }
+        val registered = object : org.bukkit.command.Command("ekoth", "EnthusiaKOTH command", "/ekoth <subcommand>", listOf("koth")) {
+            override fun execute(sender: org.bukkit.command.CommandSender, label: String, args: Array<String>): Boolean =
+                cmd.onCommand(sender, this, label, args)
+            override fun tabComplete(sender: org.bukkit.command.CommandSender, alias: String, args: Array<String>): MutableList<String> =
+                cmd.onTabComplete(sender, this, alias, args) ?: mutableListOf()
+        }
+        commandMap.register("enthusiakoth", registered)
+    }
+
+    /** Releases resources (HikariCP pool, stats writer) on plugin disable/reload. */
+    fun shutdown() {
+        (dataSource as? HikariDataSource)?.close()
     }
 }

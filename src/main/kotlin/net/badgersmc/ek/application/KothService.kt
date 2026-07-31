@@ -96,7 +96,7 @@ class KothService(
         if (cfg.progressBar.enabled && event.currentController != null) {
             val progress = progressBar(event, cfg.progressBar)
             playersInZone.forEach { p ->
-                p.sendActionBar(progress.toComponent())
+                p.sendActionBar(progress)
             }
         }
 
@@ -274,9 +274,14 @@ class KothService(
 
     private fun performLeave(event: KothEvent, cfg: EnthusiaKothConfig) {
         val controller = event.currentController ?: return
-        val name = teamName(controller)
-        val leaveMsg = lang.msg("koth.leave", "left" to name, "koth_name" to event.arena.id, "time_left" to formatTime(event.arena.captureSeconds.toLong()))
-        Bukkit.broadcast(leaveMsg)
+        // Only announce the leave once per controller departure (DECAY keeps the
+        // controller set until the score drains, so this fires every tick otherwise).
+        if (event.leaveAnnouncedFor != controller) {
+            event.leaveAnnouncedFor = controller
+            val name = teamName(controller)
+            val leaveMsg = lang.msg("koth.leave", "left" to name, "koth_name" to event.arena.id, "time_left" to formatTime(event.arena.captureSeconds.toLong()))
+            Bukkit.broadcast(leaveMsg)
+        }
 
         val arena = event.arena
         when (arena.leaveBehavior) {
@@ -347,7 +352,7 @@ class KothService(
 
     private fun executeRewards(event: KothEvent, winner: TeamId) {
         val arena = event.arena
-        val name = teamName(winner)
+        val name = sanitizeName(teamName(winner))
         val guildId = if (winner.mode == TeamMode.GUILD) winner.id else null
 
         for (cmd in arena.rewards) {
@@ -539,6 +544,16 @@ class KothService(
         }
     }
 
+    /**
+     * Sanitizes a guild/player name for safe substitution into console commands.
+     * Strips legacy color codes and MiniMessage tags, then restricts to [A-Za-z0-9_].
+     */
+    private fun sanitizeName(raw: String): String {
+        val stripped = raw.replace(Regex("§[0-9a-fk-orA-FK-OR]"), "")
+            .replace(Regex("<[^>]*>"), "")
+        return stripped.filter { it.isLetterOrDigit() || it == '_' }
+    }
+
     fun capperName(event: KothEvent): String? {
         val ctl = event.currentController ?: return null
         return teamName(ctl)
@@ -550,18 +565,20 @@ class KothService(
         return "${c.blockX}, ${c.blockY}, ${c.blockZ}"
     }
 
-    private fun progressBar(event: KothEvent, cfg: ProgressBarConfig): String {
+    private fun progressBar(event: KothEvent, cfg: ProgressBarConfig): net.kyori.adventure.text.Component {
         val arena = event.arena
-        val isConquest = arena.family.equals("conquest", ignoreCase = true)
+        // Fixed target for ALL families: conquest sums would never reach 1.0
+        // when multiple teams hold points, making the bar meaningless.
+        val max = arena.captureSeconds.coerceAtLeast(1).toDouble()
         val current = event.scores.values.maxOrNull() ?: 0.0
-        val max = if (isConquest) event.scores.values.sum().coerceAtLeast(1.0) else arena.captureSeconds.toDouble()
         val progress = (current / max).coerceIn(0.0, 1.0)
         val filled = (progress * cfg.length).toInt()
-        val empty = cfg.length - filled
+        val empty = (cfg.length - filled).coerceAtLeast(0)
         val emptyColor = lang.raw("progress_bar.empty_color")
-        val bar = cfg.character.repeat(filled) + emptyColor.repeat(empty.coerceAtLeast(0))
-        val format = lang.msg("progress_bar.format", "progress_bar" to bar)
-        return lang.raw("progress_bar.format").replace("{PROGRESS_BAR}", bar).replace("&", "§")
+        // Build the bar as a MiniMessage fragment: filled chars in the default
+        // color, empty chars in the configured empty color.
+        val bar = cfg.character.repeat(filled) + emptyColor + cfg.character.repeat(empty)
+        return lang.msg("progress_bar.format", "progress_bar" to bar)
     }
 
     private fun broadcast(msg: String, vararg pairs: Pair<String, String>) {

@@ -68,24 +68,26 @@ class KothPlaceholderExpansion(
         }
 
         // Arena-scoped placeholders: <arena>_timeleft, <arena>_capper, <arena>_wins
-        val arena = arenas().entries.firstOrNull { (id, _) ->
-            params.startsWith(id, ignoreCase = true)
+        // Require the arena ID to be followed by '_' so a shorter arena ID that is
+        // a prefix of another (e.g. "arena1" vs "arena10") can't shadow it.
+        val arenaEntry = arenas().entries.firstOrNull { (id, _) ->
+            params.length > id.length && params.startsWith(id, ignoreCase = true) && params[id.length] == '_'
         } ?: return ""
 
-        val suffix = params.removePrefix(arena.key).removePrefix("_")
+        val suffix = params.substring(arenaEntry.key.length + 1).lowercase()
         return when (suffix.lowercase()) {
             "timeleft" -> {
-                if (event?.arena?.id != arena.key) return "Not Active"
+                if (event?.arena?.id != arenaEntry.key) return "Not Active"
                 val secs = event.endsAt.epochSecond - System.currentTimeMillis() / 1000
                 formatTime(secs.coerceAtLeast(0))
             }
             "capper" -> {
-                if (event?.arena?.id != arena.key) return "None"
+                if (event?.arena?.id != arenaEntry.key) return "None"
                 kothService.capperName(event) ?: "None"
             }
             "wins" -> {
                 if (player == null) return "0"
-                stats.kothWins("solo:${player.uniqueId}", arena.key).toString()
+                stats.kothWins("solo:${player.uniqueId}", arenaEntry.key).toString()
             }
             else -> ""
         }

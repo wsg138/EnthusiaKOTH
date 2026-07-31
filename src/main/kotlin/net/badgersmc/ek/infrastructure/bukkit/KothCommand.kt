@@ -260,7 +260,13 @@ class KothCommand(
     // -- Private test commands --
 
     private fun privateTest(sender: CommandSender, sub: String, arenaId: String) {
-        if (sender !is Player) { sender.sendMessage(lang.msg("private.error.not_player")); return }
+        if (sender !is Player) { sender.sendMessage(lang.msg("command.error.not_a_player")); return }
+        // Private tests occupy the single active-event slot — gate them behind a
+        // dedicated permission so unprivileged players can't lock out KOTHs.
+        if (!sender.hasPermission("enthusiakoth.privatetest")) {
+            sender.sendMessage(lang.msg("command.error.no_permission"))
+            return
+        }
         when (sub.lowercase()) {
             "start" -> privateStart(sender, arenaId)
             "join" -> privateJoin(sender)

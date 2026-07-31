@@ -72,6 +72,22 @@ class RegionProtectionListener(
     }
 
     @EventHandler(ignoreCancelled = true)
+    fun onEntityChangeBlock(event: org.bukkit.event.entity.EntityChangeBlockEvent) {
+        // Enderman pickup/place, wither/ravager destruction, farmland trampling
+        if (protection.isProtected(event.block.location)) {
+            event.isCancelled = true
+        }
+    }
+
+    @EventHandler(ignoreCancelled = true)
+    fun onBlockFromTo(event: org.bukkit.event.block.BlockFromToEvent) {
+        // Fluid (water/lava) flowing into a protected arena from outside
+        if (protection.isProtected(event.toBlock.location)) {
+            event.isCancelled = true
+        }
+    }
+
+    @EventHandler(ignoreCancelled = true)
     fun onPistonExtend(event: BlockPistonExtendEvent) {
         if (crossesProtectedBoundary(event.blocks, event.direction)) {
             event.isCancelled = true

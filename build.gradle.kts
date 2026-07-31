@@ -22,11 +22,15 @@ dependencies {
     implementation("com.github.BadgersMC.Nexus:nexus-paper-loader:v2.1.1")
 
     // LumaGuilds API (provided by server, join-classpath)
-    // Path can be overridden via -Plumaguilds.jar=... or LUMAGUILDS_JAR env var
+    // Path can be overridden via -Plumaguilds.jar=... or LUMAGUILDS_JAR env var.
+    // Fail fast with a descriptive error instead of a confusing "unresolved reference".
     val lumaguildsJar = System.getenv("LUMAGUILDS_JAR")
         ?: project.findProperty("lumaguilds.jar")?.toString()
         ?: findProperty("defaultLumaguildsJar")?.toString()
-        ?: "/opt/data/LumaGuilds/build/libs/LumaGuilds-2.1.0.jar"
+        ?: error(
+            "LumaGuilds API jar not found. Pass -Plumaguilds.jar=/path/to/LumaGuilds.jar " +
+            "or set the LUMAGUILDS_JAR environment variable."
+        )
     compileOnly(files(lumaguildsJar))
 
     // PlaceholderAPI (provided by server)
