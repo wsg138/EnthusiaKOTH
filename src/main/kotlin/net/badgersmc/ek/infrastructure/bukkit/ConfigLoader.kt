@@ -107,8 +107,8 @@ private object FlareConfigLoader {
         enabled = cbi(c, "flares.enabled", true),
         item = net.badgersmc.ek.config.FlareItemConfig(
             material = cds(c, "flares.item.material", "REDSTONE_TORCH"),
-            name = cds(c, "flares.item.name", "&#c{KOTH} Koth Flare"),
-            lore = cl(c, "flares.item.lore").ifEmpty { listOf("&7Right-Click to start a &c{KOTH} &7koth!") },
+            name = cds(c, "flares.item.name", "{KOTH} Koth Flare"),
+            lore = cl(c, "flares.item.lore").ifEmpty { listOf("Right-Click to start a {KOTH} koth!") },
         ),
     )
 }
@@ -118,7 +118,7 @@ private object ProgressBarConfigLoader {
         enabled = cbi(c, "progress-bar.enabled", true),
         length = cdi(c, "progress-bar.length", 10),
         character = cds(c, "progress-bar.character", "|"),
-        format = cds(c, "progress-bar.format", "&cKOTH Progress: &8[{PROGRESS_BAR}&8]"),
+        format = cds(c, "progress-bar.format", "KOTH Progress: [{PROGRESS_BAR}]"),
     )
 }
 
@@ -126,22 +126,22 @@ private object ReminderConfigLoader {
     fun load(c: FileConfiguration) = net.badgersmc.ek.config.ReminderConfig(
         enabled = cbi(c, "reminders.enabled", true),
         intervalSeconds = cdi(c, "reminders.interval-seconds", 300),
-        format = cds(c, "reminders.format", "&aReminder that the {KOTH} koth is still active! {CAPPER}&8({TIME_LEFT})&a is currently capturing."),
+        format = cds(c, "reminders.format", "Reminder that the {KOTH} koth is still active! {CAPPER}({TIME_LEFT}) is currently capturing."),
     )
 }
 
 private object MessageConfigLoader {
     fun load(c: FileConfiguration) = net.badgersmc.ek.config.MessageConfig(
-        enterMessage = cds(c, "messages.enter", "&a{ENTERED} entered the {KOTH_NAME} koth! Cap in {CAP_TIME}!"),
-        leaveMessage = cds(c, "messages.leave", "&a{LEFT} left the {KOTH_NAME} koth! {TIME_LEFT} left!"),
-        cappingMessage = cds(c, "messages.capping", "&a{CAPPING} is capturing the {KOTH_NAME} koth! {TIME_LEFT} left!"),
-        captureMessage = cds(c, "messages.capture", "&a{CAPTURED} captured the {KOTH_NAME} koth!"),
-        beginMessage = cds(c, "messages.begin", "&a{KOTH_NAME} has begun! Location: {LOCATION}"),
-        forcefullyEnded = cds(c, "messages.forcefully-ended", "&cThe koth {KOTH} has been forcefully ended!"),
-        kothTopHeader = cds(c, "messages.koth-top-header", "&7&m-----&r &c&lKoth Top &7(&c{PAGE}&8/&c{PAGE_MAX}&7) &m-----"),
-        kothTopFormat = cds(c, "messages.koth-top-format", "&e{INDEX}. &a{USER} &e{WINS} &awins"),
-        kothStatsFormat = cds(c, "messages.koth-stats-format", "&e{PLAYER} &ahas &e{WINS} &akoth wins."),
-        kothScheduleHeader = cds(c, "messages.koth-schedule-header", "&7&m-----&r &a&lKoth Schedule &7&m-----\n &cTime Now: {TIME_NOW}\n &cTimeZone: {TIME_ZONE}"),
+        enterMessage = cds(c, "messages.enter", "{ENTERED} entered the {KOTH_NAME} koth! Cap in {CAP_TIME}!"),
+        leaveMessage = cds(c, "messages.leave", "{LEFT} left the {KOTH_NAME} koth! {TIME_LEFT} left!"),
+        cappingMessage = cds(c, "messages.capping", "{CAPPING} is capturing the {KOTH_NAME} koth! {TIME_LEFT} left!"),
+        captureMessage = cds(c, "messages.capture", "{CAPTURED} captured the {KOTH_NAME} koth!"),
+        beginMessage = cds(c, "messages.begin", "{KOTH_NAME} has begun! Location: {LOCATION}"),
+        forcefullyEnded = cds(c, "messages.forcefully-ended", "The koth {KOTH} has been forcefully ended!"),
+        kothTopHeader = cds(c, "messages.koth-top-header", "KOTH Leaderboard (Page {PAGE}/{PAGE_MAX})"),
+        kothTopFormat = cds(c, "messages.koth-top-format", "{INDEX}. {USER} - {WINS} wins"),
+        kothStatsFormat = cds(c, "messages.koth-stats-format", "{PLAYER} has {WINS} koth wins."),
+        kothScheduleHeader = cds(c, "messages.koth-schedule-header", "KOTH Schedule - Time Now: {TIME_NOW} ({TIME_ZONE})"),
     )
 }
 

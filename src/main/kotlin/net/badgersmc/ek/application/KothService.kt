@@ -56,7 +56,8 @@ class KothService(
             EventState.STARTING -> {
                 if (!now.isBefore(event.startsAt)) {
                     event.state = EventState.ACTIVE
-                    broadcast(cfg.messages.beginMessage, "KOTH_NAME" to event.arena.id, "LOCATION" to locString(event.arena.zone))
+                    val beginMsg = lang.msg("koth.begin", "koth_name" to event.arena.id, "location" to locString(event.arena.zone))
+                    Bukkit.broadcast(beginMsg)
                 }
             }
             EventState.ACTIVE -> {
@@ -106,9 +107,8 @@ class KothService(
             if (counter <= 0) {
                 reminderCounters[event.arena.id] = rem.intervalSeconds
                 val capper = capperName(event)
-                broadcast(rem.format, "KOTH" to event.arena.id, "CAPPER" to (capper ?: "None"),
-                    "TIME_LEFT" to formatTime(event.endsAt.epochSecond - now.epochSecond),
-                    "LOCATION" to locString(event.arena.zone))
+                val reminder = lang.msg("koth.reminder", "koth_name" to event.arena.id, "capper" to (capper ?: "None"), "time_left" to formatTime(event.endsAt.epochSecond - now.epochSecond))
+                Bukkit.broadcast(reminder)
             } else {
                 reminderCounters[event.arena.id] = counter - 1
             }
@@ -150,9 +150,8 @@ class KothService(
                 val team = teamsInZone.first()
                 event.currentController = team
                 val name = teamName(team)
-                broadcast(cfg.messages.enterMessage,
-                    "ENTERED" to name, "KOTH_NAME" to arena.id,
-                    "CAP_TIME" to formatTime(arena.captureSeconds.toLong()))
+                val entered = lang.msg("koth.enter", "entered" to name, "koth_name" to arena.id, "captime" to formatTime(arena.captureSeconds.toLong()))
+                Bukkit.broadcast(entered)
             }
         } else {
             val controller = event.currentController!!
@@ -198,10 +197,8 @@ class KothService(
         val secsLeft = arena.captureSeconds - next.toInt()
         if (secsLeft > 0 && secsLeft % 30 == 0) {
             val name = teamName(controller)
-            broadcast(cfg.messages.cappingMessage,
-                "CAPPING" to name, "KOTH_NAME" to arena.id,
-                "TIME_LEFT" to formatTime(secsLeft.toLong()),
-                "LOCATION" to locString(arena.zone))
+            val capMsg = lang.msg("koth.capping", "capping" to name, "koth_name" to arena.id, "time_left" to formatTime(secsLeft.toLong()))
+            Bukkit.broadcast(capMsg)
         }
 
         if (next >= arena.captureSeconds) {
@@ -278,9 +275,8 @@ class KothService(
     private fun performLeave(event: KothEvent, cfg: EnthusiaKothConfig) {
         val controller = event.currentController ?: return
         val name = teamName(controller)
-        broadcast(cfg.messages.leaveMessage,
-            "LEFT" to name, "KOTH_NAME" to event.arena.id,
-            "TIME_LEFT" to formatTime(event.arena.captureSeconds.toLong()))
+        val leaveMsg = lang.msg("koth.leave", "left" to name, "koth_name" to event.arena.id, "time_left" to formatTime(event.arena.captureSeconds.toLong()))
+        Bukkit.broadcast(leaveMsg)
 
         val arena = event.arena
         when (arena.leaveBehavior) {
@@ -311,7 +307,8 @@ class KothService(
 
         if (winner != null) {
             val name = teamName(winner)
-            broadcast(msg.captureMessage, "CAPTURED" to name, "KOTH_NAME" to event.arena.id)
+            val capMsg = lang.msg("koth.capture", "captured" to name, "koth_name" to event.arena.id)
+            Bukkit.broadcast(capMsg)
 
             // Track win
             val statKey = if (winner.mode == TeamMode.GUILD) {
@@ -426,7 +423,8 @@ class KothService(
             state = EventState.ACTIVE,
         )
         activeEvent = event
-        broadcast(cfg.messages.beginMessage, "KOTH_NAME" to arena.id, "LOCATION" to locString(arena.zone))
+        val beginMsg = lang.msg("koth.begin", "koth_name" to arena.id, "location" to locString(arena.zone))
+        Bukkit.broadcast(beginMsg)
         discordWebhook.sendStart(arena.id, locString(arena.zone))
         if (cfg.display.zoneBorder) zoneBorderService.show(arena.zone)
         return true
@@ -502,8 +500,8 @@ class KothService(
 
     fun forceEnd(): Boolean {
         val event = activeEvent ?: return false
-        val cfg = cfgLoader()
-        broadcast(cfg.messages.forcefullyEnded, "KOTH" to event.arena.id)
+        val endMsg = lang.msg("koth.ended", "koth_name" to event.arena.id)
+        Bukkit.broadcast(endMsg)
         event.state = EventState.CANCELLED
         event.clearScores()
         event.currentController = null
@@ -560,8 +558,10 @@ class KothService(
         val progress = (current / max).coerceIn(0.0, 1.0)
         val filled = (progress * cfg.length).toInt()
         val empty = cfg.length - filled
-        val bar = cfg.character.repeat(filled) + "&7".repeat(empty.coerceAtLeast(0))
-        return cfg.format.replace("{PROGRESS_BAR}", bar)
+        val emptyColor = lang.raw("progress_bar.empty_color")
+        val bar = cfg.character.repeat(filled) + emptyColor.repeat(empty.coerceAtLeast(0))
+        val format = lang.msg("progress_bar.format", "progress_bar" to bar)
+        return lang.raw("progress_bar.format").replace("{PROGRESS_BAR}", bar).replace("&", "§")
     }
 
     private fun broadcast(msg: String, vararg pairs: Pair<String, String>) {
