@@ -7,6 +7,7 @@ import org.bukkit.event.EventHandler
 import org.bukkit.event.Listener
 import org.bukkit.event.block.BlockBreakEvent
 import org.bukkit.event.block.BlockExplodeEvent
+import org.bukkit.event.block.BlockMultiPlaceEvent
 import org.bukkit.event.block.BlockPlaceEvent
 import org.bukkit.event.block.BlockPistonExtendEvent
 import org.bukkit.event.block.BlockPistonRetractEvent
@@ -36,6 +37,18 @@ class RegionProtectionListener(
     @EventHandler(ignoreCancelled = true)
     fun onPlace(event: BlockPlaceEvent) {
         if (protection.isProtected(event.blockPlaced.location)) {
+            event.isCancelled = true
+            event.player.sendActionBar(protectedMsg)
+        }
+    }
+
+    @EventHandler(ignoreCancelled = true)
+    fun onMultiPlace(event: BlockMultiPlaceEvent) {
+        // Multi-block placements (beds, doors, banners) — check every block
+        // in the structure, not just the clicked block.
+        val anyProtected = event.blockPlaced.location.let { protection.isProtected(it) }
+            || event.replacedBlockStates.any { protection.isProtected(it.location) }
+        if (anyProtected) {
             event.isCancelled = true
             event.player.sendActionBar(protectedMsg)
         }

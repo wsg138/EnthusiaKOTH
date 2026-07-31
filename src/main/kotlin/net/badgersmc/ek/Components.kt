@@ -25,5 +25,5 @@ fun List<String>.toLore(): List<Component> =
  * - MiniMessage tags: <red>, <bold>, <gradient:red:blue>, </red>, <#FF0000>
  */
 fun String.stripColors(): String =
-    this.replace(Regex("[§&][0-9a-fk-orA-FK-OR]"), "")       // §a, &a, §l, §r, etc.
+    this.replace(Regex("[§&][0-9a-fk-orxA-FK-ORX]"), "")       // §a, &a, §l, §r, §x (RGB prefix), etc.
         .replace(Regex("<[^>]+>"), "")                         // <red>, </red>, <#FF0000>, <gradient:...>

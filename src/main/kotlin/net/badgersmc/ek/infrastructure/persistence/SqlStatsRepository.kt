@@ -5,6 +5,7 @@ import java.sql.ResultSet
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import javax.sql.DataSource
 
 /**
@@ -107,8 +108,19 @@ class SqlStatsRepository(
         // Already written on each increment — cache is just a read-through
     }
 
-    /** Flushes pending writes and shuts down the writer thread (call on plugin disable). */
+    /**
+     * Flushes pending writes and shuts down the writer thread (call on plugin disable).
+     * Waits for queued upserts to complete so no writes are lost when HikariCP closes.
+     */
     fun shutdown() {
         ioExecutor.shutdown()
+        try {
+            if (!ioExecutor.awaitTermination(10, TimeUnit.SECONDS)) {
+                ioExecutor.shutdownNow()
+            }
+        } catch (e: InterruptedException) {
+            ioExecutor.shutdownNow()
+            Thread.currentThread().interrupt()
+        }
     }
 }

@@ -86,7 +86,9 @@ class ServiceModule(private val plugin: EnthusiaKothPlugin) {
         },
     )
 
-    val displayService = DisplayService(plugin, langService)
+    val displayService = DisplayService(plugin, langService).also {
+        plugin.server.pluginManager.registerEvents(it, plugin)
+    }
 
     val kothService = KothService(
         cfgLoader = { config() },

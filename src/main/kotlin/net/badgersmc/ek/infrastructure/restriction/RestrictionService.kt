@@ -96,10 +96,22 @@ class RestrictionService(
         return when (item.type) {
             Material.MACE -> when (rules.maceRule) {
                 MaceRule.FULLY_DISABLED -> RestrictionDecision.denied("Mace damage is disabled for this KOTH.")
-                // Base damage allowed but still subject to the per-item cooldown —
-                // route through decision() so remainingCooldown is enforced.
-                MaceRule.BREACH_DISABLED -> decision(player, event, RestrictedItemType.MACE)
-                MaceRule.DENSITY_DISABLED -> decision(player, event, RestrictedItemType.MACE)
+                // Base mace damage allowed, but the specific enchant is blocked —
+                // enforce it here (the cooldown path alone only gates frequency).
+                MaceRule.BREACH_DISABLED -> {
+                    if (item.containsEnchantment(org.bukkit.enchantments.Enchantment.BREACH)) {
+                        RestrictionDecision.denied("The Breach enchantment is disabled for this KOTH.")
+                    } else {
+                        decision(player, event, RestrictedItemType.MACE)
+                    }
+                }
+                MaceRule.DENSITY_DISABLED -> {
+                    if (item.containsEnchantment(org.bukkit.enchantments.Enchantment.DENSITY)) {
+                        RestrictionDecision.denied("The Density enchantment is disabled for this KOTH.")
+                    } else {
+                        decision(player, event, RestrictedItemType.MACE)
+                    }
+                }
                 MaceRule.FULLY_ALLOWED -> decision(player, event, RestrictedItemType.MACE)
             }
 

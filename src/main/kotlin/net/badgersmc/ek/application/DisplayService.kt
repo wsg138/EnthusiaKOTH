@@ -3,6 +3,9 @@ package net.badgersmc.ek.application
 import net.badgersmc.ek.toComponent
 import net.kyori.adventure.bossbar.BossBar
 import org.bukkit.Bukkit
+import org.bukkit.event.EventHandler
+import org.bukkit.event.Listener
+import org.bukkit.event.player.PlayerJoinEvent
 import org.bukkit.plugin.java.JavaPlugin
 
 /**
@@ -11,7 +14,7 @@ import org.bukkit.plugin.java.JavaPlugin
 class DisplayService(
     private val plugin: JavaPlugin,
     private val lang: net.badgersmc.nexus.i18n.LangService,
-) {
+) : Listener {
 
     private var bossBar: BossBar? = null
 
@@ -40,6 +43,13 @@ class DisplayService(
             bossBar = b
         }
         bar.name(text)
+    }
+
+    /** Players who join mid-KOTH should also see the bossbar. */
+    @EventHandler(ignoreCancelled = true)
+    fun onJoin(event: PlayerJoinEvent) {
+        // addViewer is idempotent — safe to call unconditionally when a bar exists
+        bossBar?.addViewer(event.player)
     }
 
     fun clear() {
