@@ -120,6 +120,6 @@ flare:
   started_broadcast: "<prefix><yellow><player> <green>started the <yellow><koth> <green>koth with a flare! Go to <yellow><location><green>!"
 
 bossbar:
-  format: "<koth> <separator><capper><contested> <separator><time>"
-  separator: " <dark_gray>| "
-  contested: " <red>⚔"
+  format_with_capper: "<gold><bold><koth_name> <dark_gray>|<green><capper><contested> <dark_gray>|<gray><time>"
+  format_no_capper: "<gold><bold><koth_name> <dark_gray>|<gray><time>"
+  contested: "<red> ⚔"

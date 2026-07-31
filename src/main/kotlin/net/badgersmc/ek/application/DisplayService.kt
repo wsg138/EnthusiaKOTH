@@ -17,21 +17,21 @@ class DisplayService(
 
     /** Show or update a bossbar for the active KOTH */
     fun showKoth(kothName: String, capper: String?, timeLeft: String, contested: Boolean) {
-        val capperText = if (capper != null) lang.msg("bossbar.format", 
-            "koth" to ("<gold><bold>$kothName" as Any),
-            "separator" to (lang.msg("bossbar.separator").toString()),
-            "capper" to ("<green>$capper" as Any),
-            "contested" to (if (contested) lang.msg("bossbar.contested").toString() else ""),
-            "time" to ("<gray>$timeLeft" as Any),
-        ) else lang.msg("bossbar.format", 
-            "koth" to ("<gold><bold>$kothName" as Any),
-            "separator" to (lang.msg("bossbar.separator").toString()),
-            "capper" to "",
-            "contested" to "",
-            "time" to ("<gray>$timeLeft" as Any),
-        )
+        val text = if (capper != null) {
+            lang.msg("bossbar.format_with_capper",
+                "koth_name" to kothName,
+                "capper" to capper,
+                "contested" to (if (contested) lang.msg("bossbar.contested") else net.kyori.adventure.text.Component.empty()),
+                "time" to timeLeft,
+            )
+        } else {
+            lang.msg("bossbar.format_no_capper",
+                "koth_name" to kothName,
+                "time" to timeLeft,
+            )
+        }
         val bar = bossBar ?: BossBar.bossBar(
-            capperText,
+            text,
             1.0f,
             BossBar.Color.RED,
             BossBar.Overlay.PROGRESS,
@@ -39,7 +39,7 @@ class DisplayService(
             Bukkit.getOnlinePlayers().forEach { b.addViewer(it) }
             bossBar = b
         }
-        bar.name(capperText)
+        bar.name(text)
     }
 
     fun clear() {
