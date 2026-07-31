@@ -20,17 +20,16 @@ import org.bukkit.event.player.PlayerBucketFillEvent
  */
 class RegionProtectionListener(
     private val protection: RegionProtectionService,
+    private val lang: net.badgersmc.nexus.i18n.LangService,
 ) : Listener {
 
-    companion object {
-        private val PROTECTED_MESSAGE = "§cThis KOTH arena is protected.".toComponent()
-    }
+    private val protectedMsg by lazy { lang.msg("protection.protected") }
 
     @EventHandler(ignoreCancelled = true)
     fun onBreak(event: BlockBreakEvent) {
         if (protection.isProtected(event.block.location)) {
             event.isCancelled = true
-            event.player.sendActionBar(PROTECTED_MESSAGE)
+            event.player.sendActionBar(protectedMsg)
         }
     }
 
@@ -38,7 +37,7 @@ class RegionProtectionListener(
     fun onPlace(event: BlockPlaceEvent) {
         if (protection.isProtected(event.blockPlaced.location)) {
             event.isCancelled = true
-            event.player.sendActionBar(PROTECTED_MESSAGE)
+            event.player.sendActionBar(protectedMsg)
         }
     }
 
@@ -46,7 +45,7 @@ class RegionProtectionListener(
     fun onBucketEmpty(event: PlayerBucketEmptyEvent) {
         if (isProtectedBucketTarget(event.blockClicked, event.blockFace)) {
             event.isCancelled = true
-            event.player.sendActionBar(PROTECTED_MESSAGE)
+            event.player.sendActionBar(protectedMsg)
         }
     }
 
@@ -54,7 +53,7 @@ class RegionProtectionListener(
     fun onBucketFill(event: PlayerBucketFillEvent) {
         if (protection.isProtected(event.blockClicked.location)) {
             event.isCancelled = true
-            event.player.sendActionBar(PROTECTED_MESSAGE)
+            event.player.sendActionBar(protectedMsg)
         }
     }
 

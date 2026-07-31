@@ -1,14 +1,15 @@
 package net.badgersmc.ek.infrastructure.bukkit
 
+import net.badgersmc.ek.application.FlareService
 import net.badgersmc.ek.application.KothService
 import net.badgersmc.ek.application.ScheduleService
 import net.badgersmc.ek.config.EnthusiaKothConfig
+import net.badgersmc.ek.domain.EventState
 import net.badgersmc.ek.domain.KothArena
 import net.badgersmc.ek.domain.LockState
 import net.badgersmc.ek.infrastructure.lumaguilds.LumaGuildsAdapter
 import net.badgersmc.ek.infrastructure.persistence.SqlStatsRepository
-import net.badgersmc.ek.toComponent
-import net.badgersmc.ek.toLore
+import net.badgersmc.nexus.i18n.LangService
 import net.kyori.adventure.text.Component
 import net.kyori.adventure.text.format.NamedTextColor
 import net.kyori.adventure.text.format.TextDecoration
@@ -30,7 +31,8 @@ class KothCommand(
     private val scheduleService: ScheduleService,
     private val stats: SqlStatsRepository,
     private val guilds: LumaGuildsAdapter,
-    private val flareService: net.badgersmc.ek.application.FlareService,
+    private val flareService: FlareService,
+    private val lang: LangService,
     private val arenas: () -> Map<String, KothArena>,
     private val reloadAction: () -> Unit,
 ) : CommandExecutor, TabCompleter {
@@ -81,29 +83,29 @@ class KothCommand(
     }
 
     private fun sendHelp(sender: CommandSender) {
-        sender.sendMessage("§7§m-----§r §c§lEnthusiaKOTH §7§m-----".toComponent())
-        sender.sendMessage("§a/ekoth gui §7- Open KOTH GUI".toComponent())
-        sender.sendMessage("§a/ekoth schedule §7- Show KOTH schedule".toComponent())
-        sender.sendMessage("§a/ekoth top [page] §7- KOTH leaderboard".toComponent())
-        sender.sendMessage("§a/ekoth stats [player] §7- Your KOTH stats".toComponent())
+        sender.sendMessage(lang.msg("command.help.header"))
+        sender.sendMessage(lang.msg("command.help.gui"))
+        sender.sendMessage(lang.msg("command.help.schedule"))
+        sender.sendMessage(lang.msg("command.help.top"))
+        sender.sendMessage(lang.msg("command.help.stats"))
         if (sender.hasPermission("enthusiakoth.admin")) {
-            sender.sendMessage("§c/ekoth start <arena> §7- Start a KOTH".toComponent())
-            sender.sendMessage("§c/ekoth stop §7- Force-end active KOTH".toComponent())
-            sender.sendMessage("§c/ekoth cancel §7- Force-end active KOTH".toComponent())
-            sender.sendMessage("§c/ekoth giveflare <player> <arena> [amount] §7- Give flare".toComponent())
-            sender.sendMessage("§c/ekoth reload §7- Reload config".toComponent())
-            sender.sendMessage("§c/ekoth status §7- Show server status".toComponent())
-            sender.sendMessage("§c/ekoth lock <unlocked|manual_locked|all_locked> §7- Set lock state".toComponent())
+            sender.sendMessage(lang.msg("command.help.start"))
+            sender.sendMessage(lang.msg("command.help.stop"))
+            sender.sendMessage(lang.msg("command.help.cancel"))
+            sender.sendMessage(lang.msg("command.help.giveflare"))
+            sender.sendMessage(lang.msg("command.help.reload"))
+            sender.sendMessage(lang.msg("command.help.status"))
+            sender.sendMessage(lang.msg("command.help.lock"))
         }
     }
 
     // -- Player commands --
 
     private fun gui(sender: CommandSender) {
-        if (sender !is Player) { sender.sendMessage("§cOnly players can use this.".toComponent()); return }
+        if (sender !is Player) { sender.sendMessage(lang.msg("command.error.not_a_player")); return }
         val arenaIds = arenas().keys.toList()
         val size = ((arenaIds.size + 8) / 9).coerceIn(1, 6) * 9 // rows of 9, cap at 6 rows (54)
-        val inventory = Bukkit.createInventory(null, size, "§2§lKOTHs".toComponent())
+        val inventory = Bukkit.createInventory(null, size, lang.msg("command.gui.title"))
         for ((slot, id) in arenaIds.withIndex()) {
             if (slot >= size) break
             val event = kothService.activeEvent
@@ -115,12 +117,12 @@ class KothCommand(
             } else { "Scheduled" }
             val item = ItemStack(if (isActive) Material.GLOWSTONE_DUST else Material.REDSTONE_TORCH)
             val meta = item.itemMeta ?: continue
-            meta.displayName("§${if (isActive) 'a' else '7'}${id.uppercase()}".toComponent())
+            meta.displayName(lang.msg(if (isActive) "command.gui.item_name_active" else "command.gui.item_name_inactive", "name" to id.uppercase()))
             meta.lore(listOf(
-                "§8* §fActive: §${if (isActive) 'a' else 'c'}$isActive",
-                "§8* §fCapturing: §${if (isActive) 'a' else '7'}$capper",
-                "§8* §fTime Left: §${if (isActive) 'a' else '7'}$timeLeft",
-            ).toLore())
+                lang.msg(if (isActive) "command.gui.lore_active_yes" else "command.gui.lore_active_no", "status" to isActive.toString()),
+                lang.msg(if (isActive) "command.gui.lore_capturing_yes" else "command.gui.lore_capturing_no", "capper" to capper),
+                lang.msg(if (isActive) "command.gui.lore_time_left_yes" else "command.gui.lore_time_left_no", "time" to timeLeft),
+            ))
             item.itemMeta = meta
             inventory.setItem(slot, item)
         }
@@ -131,17 +133,17 @@ class KothCommand(
         val cfg = cfgLoader()
         val now = ZonedDateTime.now(cfg.schedule.zone)
         val timeStr = now.format(DateTimeFormatter.ofPattern("HH:mm"))
-        sender.sendMessage("§7§m-----§r §a§lKoth Schedule §7§m-----".toComponent())
-        sender.sendMessage("§cTime Now: §e$timeStr".toComponent())
-        sender.sendMessage("§cTimeZone: §e${cfg.schedule.zone.id}".toComponent())
-        sender.sendMessage("".toComponent())
+        sender.sendMessage(lang.msg("command.schedule.header"))
+        sender.sendMessage(lang.msg("command.schedule.time_now", "time" to timeStr))
+        sender.sendMessage(lang.msg("command.schedule.timezone", "zone" to cfg.schedule.zone.id))
+        sender.sendMessage(Component.empty())
         for ((id, arena) in arenas()) {
-            sender.sendMessage("§a$id".toComponent())
+            sender.sendMessage(lang.msg("command.schedule.entry", "name" to id))
             val schedules = arena.schedule.ifEmpty { cfg.schedule.times }
             for (t in schedules) {
-                sender.sendMessage("  §8- §a$t".toComponent())
+                sender.sendMessage(lang.msg("command.schedule.entry_time", "time" to t))
             }
-            sender.sendMessage("".toComponent())
+            sender.sendMessage(Component.empty())
         }
     }
 
@@ -149,96 +151,91 @@ class KothCommand(
         val cfg = cfgLoader()
         val max = stats.maxPages().coerceAtLeast(1)
         val p = page.coerceIn(1, max)
-        sender.sendMessage(cfg.messages.kothTopHeader.replace("&", "§").toComponent())
+        sender.sendMessage(lang.msg("command.top.header"))
         var index = (p - 1) * 10 + 1
         for ((key, wins) in stats.allWins().entries.sortedByDescending { it.value }.drop((p - 1) * 10).take(10)) {
             val user = formatStatUser(key)
-            sender.sendMessage(cfg.messages.kothTopFormat
-                .replace("{INDEX}", index.toString())
-                .replace("{USER}", user)
-                .replace("{WINS}", wins.toString())
-                .replace("{FACTION}", user)
-                .replace("&", "§").toComponent())
+            sender.sendMessage(lang.msg("command.top.entry", "rank" to index.toString(), "player" to user, "wins" to wins.toString()))
             index++
         }
     }
 
     private fun stats(sender: CommandSender, target: String?) {
         val player = if (target != null) Bukkit.getPlayerExact(target) else (sender as? Player)
-        if (player == null) { sender.sendMessage("§cPlayer not found.".toComponent()); return }
+        if (player == null) { sender.sendMessage(lang.msg("command.error.player_not_found")); return }
         val soloKey = "solo:${player.uniqueId}"
         val total = stats.totalWins(soloKey)
-        if (sender == player) sender.sendMessage("§aYou have won §e$total §akoths.".toComponent())
-        else sender.sendMessage("§e${player.name} §ahas won §e$total §akoths.".toComponent())
+        if (sender == player) sender.sendMessage(lang.msg("command.error.stats_self", "wins" to total.toString()))
+        else sender.sendMessage(lang.msg("command.error.stats_other", "player" to player.name, "wins" to total.toString()))
     }
 
     // -- Admin commands --
 
     private fun start(sender: CommandSender, arenaId: String) {
-        if (!sender.hasPermission("enthusiakoth.admin")) { sender.sendMessage("§cNo permission.".toComponent()); return }
+        if (!sender.hasPermission("enthusiakoth.admin")) { sender.sendMessage(lang.msg("command.error.no_permission")); return }
         val arena = arenas()[arenaId]
-        if (arena == null) { sender.sendMessage("§cKOTH doesn't exist! Available: ${arenas().keys.joinToString(", ")}".toComponent()); return }
+        if (arena == null) { sender.sendMessage(lang.msg("command.error.koth_not_found", "koths" to arenas().keys.joinToString(", "))); return }
         if (!kothService.startEvent(arena)) {
-            sender.sendMessage(if (kothService.activeEvent != null) "§cA KOTH is already active!".toComponent() else "§cCannot start KOTH — check lock state.".toComponent())
+            sender.sendMessage(lang.msg(if (kothService.activeEvent != null) "command.error.already_active" else "command.error.locked"))
             return
         }
-        sender.sendMessage("§aStarted the §e$arenaId §akoth.".toComponent())
+        sender.sendMessage(lang.msg("command.success.started", "arena" to arenaId))
     }
 
     private fun stop(sender: CommandSender) {
-        if (!sender.hasPermission("enthusiakoth.admin")) { sender.sendMessage("§cNo permission.".toComponent()); return }
-        if (!kothService.forceEnd()) { sender.sendMessage("§cNo active KOTH.".toComponent()); return }
-        sender.sendMessage("§aEnded the active koth.".toComponent())
+        if (!sender.hasPermission("enthusiakoth.admin")) { sender.sendMessage(lang.msg("command.error.no_permission")); return }
+        if (!kothService.forceEnd()) { sender.sendMessage(lang.msg("command.error.no_active")); return }
+        sender.sendMessage(lang.msg("command.success.ended"))
     }
 
     private fun giveFlare(sender: CommandSender, playerName: String, arenaId: String, amount: Int) {
-        if (!sender.hasPermission("enthusiakoth.admin")) { sender.sendMessage("§cNo permission.".toComponent()); return }
+        if (!sender.hasPermission("enthusiakoth.admin")) { sender.sendMessage(lang.msg("command.error.no_permission")); return }
         val target = Bukkit.getPlayerExact(playerName)
-        if (target == null) { sender.sendMessage("§cPlayer not found.".toComponent()); return }
+        if (target == null) { sender.sendMessage(lang.msg("command.error.player_not_found")); return }
         val arena = arenas()[arenaId]
-        if (arena == null) { sender.sendMessage("§cKOTH doesn't exist.".toComponent()); return }
+        if (arena == null) { sender.sendMessage(lang.msg("command.error.koth_not_found_short")); return }
         val flare = flareService.createFlare(arena)
         flare.amount = amount.coerceAtLeast(1)
-        sender.sendMessage("§aGave §e${target.name} $amount §e${arenaId} §akoth flares.".toComponent())
-        target.sendMessage("§aYou received $amount §e${arenaId} §akoth flares!".toComponent())
+        sender.sendMessage(lang.msg("command.error.flare_given", "player" to target.name, "amount" to amount.toString(), "koth" to arenaId))
+        target.sendMessage(lang.msg("command.error.flare_received", "amount" to amount.toString(), "koth" to arenaId))
         target.inventory.addItem(flare).values.forEach { leftover ->
             target.world.dropItem(target.location, leftover)
         }
     }
 
     private fun doReload(sender: CommandSender) {
-        if (!sender.hasPermission("enthusiakoth.admin")) { sender.sendMessage("§cNo permission.".toComponent()); return }
+        if (!sender.hasPermission("enthusiakoth.admin")) { sender.sendMessage(lang.msg("command.error.no_permission")); return }
         reloadAction()
-        sender.sendMessage("§aConfig reloaded.".toComponent())
+        sender.sendMessage(lang.msg("command.error.reloaded"))
     }
 
     // -- Status & Lock commands --
 
     private fun status(sender: CommandSender) {
-        if (!sender.hasPermission("enthusiakoth.admin")) { sender.sendMessage("§cNo permission.".toComponent()); return }
+        if (!sender.hasPermission("enthusiakoth.admin")) { sender.sendMessage(lang.msg("command.error.no_permission")); return }
         val cfg = cfgLoader()
         val event = kothService.activeEvent
-        val line = "§7§m----------------------------------------§r"
-        sender.sendMessage(line.toComponent())
-        sender.sendMessage("§6§lEnthusiaKOTH Status".toComponent())
-        sender.sendMessage("§7Lock: ${cfg.locks.state.name.lowercase()}".toComponent())
-        sender.sendMessage("§7Active: ${event?.arena?.id ?: "§7None"}".toComponent())
+        val line = lang.msg("command.status.line")
+        sender.sendMessage(line)
+        sender.sendMessage(lang.msg("command.status.header"))
+        sender.sendMessage(lang.msg("command.status.lock", "state" to cfg.locks.state.name.lowercase()))
+        sender.sendMessage(lang.msg("command.status.active", "arena" to (event?.arena?.id ?: "None")))
         if (event != null) {
             val capper = kothService.capperName(event) ?: "None"
             val timeLeft = formatTime((event.endsAt.epochSecond - System.currentTimeMillis() / 1000).coerceAtLeast(0))
-            sender.sendMessage("§7  Capper: §a$capper".toComponent())
-            sender.sendMessage("§7  Time left: §a$timeLeft".toComponent())
+            sender.sendMessage(lang.msg("command.status.capper", "capper" to capper))
+            sender.sendMessage(lang.msg("command.status.time_left", "time" to timeLeft))
         }
         val next = scheduleService.nextScheduledStart()
         if (next != null) {
             val secs = java.time.Duration.between(java.time.Instant.now(), next).toSeconds().coerceAtLeast(0)
-            sender.sendMessage("§7Next scheduled: §a${formatTime(secs)}".toComponent())
+            sender.sendMessage(lang.msg("command.status.next_scheduled", "time" to formatTime(secs)))
         }
-        sender.sendMessage(line.toComponent())
+        sender.sendMessage(line)
     }
 
     private fun lock(sender: CommandSender, stateArg: String) {
-        if (!sender.hasPermission("enthusiakoth.admin")) { sender.sendMessage("§cNo permission.".toComponent()); return }
+        if (!sender.hasPermission("enthusiakoth.admin")) { sender.sendMessage(lang.msg("command.error.no_permission")); return }
         val normalized = when (stateArg.lowercase()) {
             "off" -> LockState.UNLOCKED
             "manual" -> LockState.MANUAL_LOCKED
@@ -246,7 +243,7 @@ class KothCommand(
             else -> try { LockState.valueOf(stateArg.uppercase()) } catch (_: IllegalArgumentException) { null }
         }
         if (normalized == null) {
-            sender.sendMessage("§cInvalid lock state. Valid: ${LockState.entries.joinToString(", ") { it.name.lowercase() }}".toComponent())
+            sender.sendMessage(lang.msg("command.error.invalid_lock", "states" to LockState.entries.joinToString(", ") { it.name.lowercase() }))
             return
         }
         val cfg = cfgLoader() // unused — lock state written below, applied by reloadAction
@@ -257,33 +254,32 @@ class KothCommand(
         } catch (_: Exception) { /* best-effort */ }
         // Apply to live config via reload
         reloadAction()
-        sender.sendMessage("§aLock set to §e${normalized.name.lowercase()}§a.".toComponent())
+        sender.sendMessage(lang.msg("command.error.lock_set", "state" to normalized.name.lowercase()))
     }
 
     // -- Private test commands --
 
     private fun privateTest(sender: CommandSender, sub: String, arenaId: String) {
-        if (sender !is Player) { sender.sendMessage("§cOnly players can use this.".toComponent()); return }
+        if (sender !is Player) { sender.sendMessage(lang.msg("private.error.not_player")); return }
         when (sub.lowercase()) {
             "start" -> privateStart(sender, arenaId)
             "join" -> privateJoin(sender)
             "leave" -> privateLeave(sender)
             "cancel" -> privateCancel(sender)
-            else -> sender.sendMessage("§cUsage: /ekoth private <start|join|leave|cancel> [arena]".toComponent())
+            else -> sender.sendMessage(lang.msg("private.usage"))
         }
     }
 
     private fun privateStart(player: Player, arenaId: String) {
         val arena = arenas()[arenaId]
         if (arena == null) {
-            player.sendMessage("§cArena not found. Available: ${arenas().keys.joinToString(", ")}".toComponent())
+            player.sendMessage(lang.msg("private.error.arena_not_found", "koths" to arenas().keys.joinToString(", ")))
             return
         }
         val started = kothService.startPrivateTest(arena, player.uniqueId, cfgLoader())
         if (!started) {
             player.sendMessage(
-                if (kothService.activeEvent != null) "§cA KOTH is already active!".toComponent()
-                else "§cCannot start private test — check lock state.".toComponent()
+                lang.msg(if (kothService.activeEvent != null) "private.error.already_active" else "private.error.locked")
             )
         }
     }
@@ -291,59 +287,59 @@ class KothCommand(
     private fun privateJoin(player: Player) {
         val cfg = cfgLoader()
         val event = kothService.activeEvent ?: run {
-            player.sendMessage("§cThere is no active private KOTH to join.".toComponent())
+            player.sendMessage(lang.msg("private.error.no_active"))
             return
         }
         if (!event.isPrivateTest) {
-            player.sendMessage("§cThe current KOTH is not a private test.".toComponent())
+            player.sendMessage(lang.msg("private.error.not_private"))
             return
         }
         if (event.state != net.badgersmc.ek.domain.EventState.STARTING && event.state != net.badgersmc.ek.domain.EventState.ACTIVE) {
-            player.sendMessage("§cThis private KOTH is no longer accepting participants.".toComponent())
+            player.sendMessage(lang.msg("private.error.expired"))
             return
         }
         if (event.isOwner(player.uniqueId)) {
-            player.sendMessage("§cYou are the owner of this private KOTH.".toComponent())
+            player.sendMessage(lang.msg("private.error.is_owner"))
             return
         }
         if (!event.join(player.uniqueId)) {
-            player.sendMessage("§cYou are already in this private KOTH.".toComponent())
+            player.sendMessage(lang.msg("private.error.already_joined"))
             return
         }
-        player.sendMessage("§aJoined the private KOTH!".toComponent())
+        player.sendMessage(lang.msg("private.success.joined"))
         if (cfg.privateTesting.showObjectiveParticles) {
-            player.sendMessage("§7Follow the particles to the objective!".toComponent())
+            player.sendMessage(lang.msg("private.objective_particles"))
         }
     }
 
     private fun privateLeave(player: Player) {
         val event = kothService.activeEvent ?: run {
-            player.sendMessage("§cYou are not in a private KOTH.".toComponent())
+            player.sendMessage(lang.msg("private.error.not_in_private"))
             return
         }
         if (!event.isPrivateTest || !event.isParticipant(player.uniqueId)) {
-            player.sendMessage("§cYou are not in a private KOTH.".toComponent())
+            player.sendMessage(lang.msg("private.error.not_in_private"))
             return
         }
         if (event.isOwner(player.uniqueId)) {
-            player.sendMessage("§cThe owner must use /ekoth private cancel instead.".toComponent())
+            player.sendMessage(lang.msg("private.error.owner_cancel"))
             return
         }
         event.leave(player.uniqueId)
-        player.sendMessage("§aLeft the private KOTH.".toComponent())
+        player.sendMessage(lang.msg("private.success.left"))
     }
 
     private fun privateCancel(player: Player) {
         val event = kothService.activeEvent ?: run {
-            player.sendMessage("§cYou do not have an active private KOTH.".toComponent())
+            player.sendMessage(lang.msg("private.error.no_private_active"))
             return
         }
         if (!event.isPrivateTest || !event.isOwner(player.uniqueId)) {
-            player.sendMessage("§cYou are not the owner of this private KOTH.".toComponent())
+            player.sendMessage(lang.msg("private.error.is_owner"))
             return
         }
         kothService.forceEnd()
-        player.sendMessage("§cPrivate KOTH cancelled.".toComponent())
+        player.sendMessage(lang.msg("private.error.cancelled_active"))
     }
 
     fun handleGuiClick(player: Player, slot: Int) {
@@ -352,16 +348,16 @@ class KothCommand(
         val arenaId = arenasList[slot]
         val arena = arenas()[arenaId] ?: return
         if (kothService.activeEvent != null) {
-            player.sendMessage("§cA KOTH is already active!".toComponent())
+            player.sendMessage(lang.msg("command.error.already_active"))
             return
         }
         if (!player.hasPermission("enthusiakoth.admin")) {
-            player.sendMessage("§cYou don't have permission to start KOTHs.".toComponent())
+            player.sendMessage(lang.msg("command.error.no_permission_start"))
             return
         }
         player.closeInventory()
         kothService.startEvent(arena)
-        player.sendMessage("§aStarted §e$arenaId §afrom the GUI.".toComponent())
+        player.sendMessage(lang.msg("command.success.started_from_gui", "arena" to arenaId))
     }
 
     private fun formatTime(seconds: Long): String {

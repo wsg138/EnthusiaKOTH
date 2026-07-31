@@ -25,6 +25,7 @@ class KothListeners(
     private val flareService: FlareService,
     private val arenas: () -> Map<String, KothArena>,
     private val command: KothCommand,
+    private val lang: net.badgersmc.nexus.i18n.LangService,
 ) : Listener {
 
     @EventHandler
@@ -53,7 +54,7 @@ class KothListeners(
         val ev = kothService.activeEvent ?: return
         if (ev.arena.zone.contains(event.block.location) && !event.player.hasPermission("enthusiakoth.admin")) {
             event.isCancelled = true
-            event.player.sendMessage("§cYou cannot break blocks inside the active KOTH zone!".toComponent())
+            event.player.sendMessage(lang.msg("protection.no_break"))
         }
     }
 
@@ -62,7 +63,7 @@ class KothListeners(
         val ev = kothService.activeEvent ?: return
         if (ev.arena.zone.contains(event.block.location) && !event.player.hasPermission("enthusiakoth.admin")) {
             event.isCancelled = true
-            event.player.sendMessage("§cYou cannot place blocks inside the active KOTH zone!".toComponent())
+            event.player.sendMessage(lang.msg("protection.no_place"))
         }
     }
 

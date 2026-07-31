@@ -40,6 +40,7 @@ class KothService(
     private val fireworkService: FireworkCelebrationService,
     private val discordWebhook: DiscordWebhookService,
     private val zoneBorderService: ZoneBorderService,
+    private val lang: net.badgersmc.nexus.i18n.LangService,
 ) {
     @Volatile var activeEvent: KothEvent? = null
     private val reminderCounters = mutableMapOf<String, Int>()
@@ -488,12 +489,12 @@ class KothService(
 
         if (lobbySecs > 0) {
             val p = Bukkit.getPlayer(ownerId)
-            p?.sendMessage("§aPrivate KOTH lobby open! §e/lobby §ato join. Starting in §e${lobbySecs}s§a.".toComponent())
+            p?.sendMessage(lang.msg("private.lobby_open", "seconds" to lobbySecs.toString()))
         } else {
             val p = Bukkit.getPlayer(ownerId)
-            p?.sendMessage("§aPrivate KOTH started! Quick match: ${duration}s, capture: ${captureSecs}s.".toComponent())
+            p?.sendMessage(lang.msg("private.started", "duration" to duration.toString(), "capture" to captureSecs.toString()))
             if (testing.showObjectiveParticles) {
-                p?.sendMessage("§7Follow the particles to the objective!".toComponent())
+                p?.sendMessage(lang.msg("private.objective_particles"))
             }
         }
         return true

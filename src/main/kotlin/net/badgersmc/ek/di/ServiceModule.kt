@@ -82,7 +82,7 @@ class ServiceModule(plugin: EnthusiaKothPlugin) {
         rulesForArena = { arenaId -> config().rules.rules[arenaId] ?: RuleSet.PERMISSIVE },
     )
 
-    val displayService = DisplayService(plugin)
+    val displayService = DisplayService(plugin, langService)
 
     val kothService = KothService(
         cfgLoader = { config() },
@@ -92,12 +92,14 @@ class ServiceModule(plugin: EnthusiaKothPlugin) {
         fireworkService = fireworkService,
         discordWebhook = discordWebhook,
         zoneBorderService = zoneBorderService,
+        lang = langService,
     )
 
     val scheduleService = ScheduleService(
         cfgLoader = { config() },
         kothService = kothService,
         arenas = { arenas() },
+        lang = langService,
     )
 
     val flareService = FlareService(
@@ -114,6 +116,7 @@ class ServiceModule(plugin: EnthusiaKothPlugin) {
         stats = statsRepository,
         guilds = lumaGuildsAdapter,
         flareService = flareService,
+        lang = langService,
         arenas = { arenas() },
         reloadAction = { reload() },
     ).also { cmd ->
@@ -138,6 +141,7 @@ class ServiceModule(plugin: EnthusiaKothPlugin) {
         flareService = flareService,
         arenas = { arenas() },
         command = kothCommand,
+        lang = langService,
     ).also {
         plugin.server.pluginManager.registerEvents(it, plugin)
     }
@@ -155,6 +159,7 @@ class ServiceModule(plugin: EnthusiaKothPlugin) {
 
     val regionProtectionListener = RegionProtectionListener(
         protection = regionProtectionService,
+        lang = langService,
     ).also {
         plugin.server.pluginManager.registerEvents(it, plugin)
     }

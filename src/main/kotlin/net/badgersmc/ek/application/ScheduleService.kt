@@ -21,6 +21,7 @@ class ScheduleService(
     private val cfgLoader: () -> EnthusiaKothConfig,
     private val kothService: KothService,
     private val arenas: () -> Map<String, KothArena>,
+    private val lang: net.badgersmc.nexus.i18n.LangService,
 ) {
     private var plannedDate: LocalDate? = null
     private var dailyOrder: List<KothArena> = emptyList()
@@ -55,7 +56,7 @@ class ScheduleService(
                         lastWarned[key] = key
                         // Announce upcoming
                         Bukkit.getOnlinePlayers().forEach { p ->
-                            p.sendMessage("§a[KOTH] §e${arena.id} §astarts in ${cfg.schedule.preStartWarningSeconds / 60} minutes!".toComponent())
+                            p.sendMessage(lang.msg("koth.warning_minutes", "koth" to arena.id, "minutes" to (cfg.schedule.preStartWarningSeconds / 60).toString()))
                         }
                     }
                 }

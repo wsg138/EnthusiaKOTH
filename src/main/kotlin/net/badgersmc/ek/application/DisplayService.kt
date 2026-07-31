@@ -8,22 +8,30 @@ import org.bukkit.plugin.java.JavaPlugin
 /**
  * Display service: bossbar for active KOTH.
  */
-class DisplayService(private val plugin: JavaPlugin) {
+class DisplayService(
+    private val plugin: JavaPlugin,
+    private val lang: net.badgersmc.nexus.i18n.LangService,
+) {
 
     private var bossBar: BossBar? = null
 
     /** Show or update a bossbar for the active KOTH */
     fun showKoth(kothName: String, capper: String?, timeLeft: String, contested: Boolean) {
-        val text = buildString {
-            append("§6§l$kothName")
-            if (capper != null) {
-                append(" §8| §a$capper")
-                if (contested) append(" §c⚔")
-            }
-            append(" §8| §7$timeLeft")
-        }
+        val capperText = if (capper != null) lang.msg("bossbar.format", 
+            "koth" to ("<gold><bold>$kothName" as Any),
+            "separator" to (lang.msg("bossbar.separator").toString()),
+            "capper" to ("<green>$capper" as Any),
+            "contested" to (if (contested) lang.msg("bossbar.contested").toString() else ""),
+            "time" to ("<gray>$timeLeft" as Any),
+        ) else lang.msg("bossbar.format", 
+            "koth" to ("<gold><bold>$kothName" as Any),
+            "separator" to (lang.msg("bossbar.separator").toString()),
+            "capper" to "",
+            "contested" to "",
+            "time" to ("<gray>$timeLeft" as Any),
+        )
         val bar = bossBar ?: BossBar.bossBar(
-            text.toComponent(),
+            capperText,
             1.0f,
             BossBar.Color.RED,
             BossBar.Overlay.PROGRESS,
@@ -31,7 +39,7 @@ class DisplayService(private val plugin: JavaPlugin) {
             Bukkit.getOnlinePlayers().forEach { b.addViewer(it) }
             bossBar = b
         }
-        bar.name(text.toComponent())
+        bar.name(capperText)
     }
 
     fun clear() {
