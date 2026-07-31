@@ -28,6 +28,18 @@ class ScheduleService(
     private val lastTriggered = mutableMapOf<String, String>()
     private val lastWarned = mutableMapOf<String, String>()
 
+    /**
+     * Resets all scheduling state (called on reload) so changed schedules take
+     * effect immediately — stale "last triggered"/"last warned" markers would
+     * otherwise suppress the next run of an edited schedule.
+     */
+    fun reset() {
+        plannedDate = null
+        dailyOrder = emptyList()
+        lastTriggered.clear()
+        lastWarned.clear()
+    }
+
     fun tick() {
         val cfg = cfgLoader()
         if (!cfg.schedule.enabled) return

@@ -40,10 +40,25 @@ class ServiceModule(private val plugin: EnthusiaKothPlugin) {
 
     fun config(): EnthusiaKothConfig = _config
     fun arenas(): Map<String, KothArena> = _arenas
+
+    /**
+     * Full reload cycle — `/ekoth reload`:
+     * 1. Clean shutdown of the event subsystem: force-ends any active KOTH
+     *    (clears bossbar + zone border), resets schedule state and cooldowns.
+     * 2. Re-reads config.yml and re-parses config + arenas from disk.
+     * 3. Re-reads the lang file so message edits apply without a restart.
+     *
+     * Tick timers keep running; services read config/arenas lazily through
+     * the volatile holders, so they pick up the new values on the next tick.
+     */
     fun reload() {
+        kothService.shutdown()
+        scheduleService.reset()
+        restrictionService.clear()
         configLoader.reload()
         _config = configLoader.load()
         _arenas = configLoader.loadArenas()
+        langService.reload()
     }
 
     private val dataSource: DataSource by lazy {
