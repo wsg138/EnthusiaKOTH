@@ -101,6 +101,29 @@ class RegionProtectionListener(
     }
 
     @EventHandler(ignoreCancelled = true)
+    fun onBlockBurn(event: org.bukkit.event.block.BlockBurnEvent) {
+        if (protection.isProtected(event.block.location)) {
+            event.isCancelled = true
+        }
+    }
+
+    @EventHandler(ignoreCancelled = true)
+    fun onBlockSpread(event: org.bukkit.event.block.BlockSpreadEvent) {
+        // Fire spreading into the arena (or burning its blocks) must not destroy
+        // the protected terrain
+        if (protection.isProtected(event.block.location)) {
+            event.isCancelled = true
+        }
+    }
+
+    @EventHandler(ignoreCancelled = true)
+    fun onBlockIgnite(event: org.bukkit.event.block.BlockIgniteEvent) {
+        if (protection.isProtected(event.block.location)) {
+            event.isCancelled = true
+        }
+    }
+
+    @EventHandler(ignoreCancelled = true)
     fun onPistonExtend(event: BlockPistonExtendEvent) {
         if (crossesProtectedBoundary(event.blocks, event.direction)) {
             event.isCancelled = true

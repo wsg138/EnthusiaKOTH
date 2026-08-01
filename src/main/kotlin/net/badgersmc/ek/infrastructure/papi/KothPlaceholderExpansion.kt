@@ -1,6 +1,7 @@
 package net.badgersmc.ek.infrastructure.papi
 
 import net.badgersmc.ek.application.KothService
+import net.badgersmc.ek.application.ScheduleService
 import net.badgersmc.ek.domain.KothArena
 import net.badgersmc.ek.infrastructure.lumaguilds.LumaGuildsAdapter
 import net.badgersmc.ek.infrastructure.persistence.SqlStatsRepository
@@ -25,6 +26,7 @@ import org.bukkit.entity.Player
  */
 class KothPlaceholderExpansion(
     private val kothService: KothService,
+    private val scheduleService: ScheduleService,
     private val stats: SqlStatsRepository,
     private val guilds: LumaGuildsAdapter,
     private val arenas: () -> Map<String, KothArena>,
@@ -52,8 +54,14 @@ class KothPlaceholderExpansion(
                 val secs = event.endsAt.epochSecond - System.currentTimeMillis() / 1000
                 return formatTime(secs.coerceAtLeast(0))
             }
-            "nextkoth", "next_koth" -> return "Not implemented"  // TODO
-            "nextkothtime", "next_koth_time" -> return "0s"
+            "nextkoth", "next_koth" -> {
+                val (nextId, _) = scheduleService.nextEventInfo() ?: return "None"
+                nextId
+            }
+            "nextkothtime", "next_koth_time" -> {
+                val (_, timeLeft) = scheduleService.nextEventInfo() ?: return "0s"
+                timeLeft
+            }
         }
 
         // Player-scoped placeholders

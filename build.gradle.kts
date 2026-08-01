@@ -23,15 +23,18 @@ dependencies {
 
     // LumaGuilds API (provided by server, join-classpath)
     // Path can be overridden via -Plumaguilds.jar=... or LUMAGUILDS_JAR env var.
-    // Fail fast with a descriptive error instead of a confusing "unresolved reference".
+    // Without an explicit jar (e.g. CI), resolve the tag-pinned API from JitPack.
     val lumaguildsJar = System.getenv("LUMAGUILDS_JAR")
         ?: project.findProperty("lumaguilds.jar")?.toString()
         ?: findProperty("defaultLumaguildsJar")?.toString()
-        ?: error(
-            "LumaGuilds API jar not found. Pass -Plumaguilds.jar=/path/to/LumaGuilds.jar " +
-            "or set the LUMAGUILDS_JAR environment variable."
-        )
-    compileOnly(files(lumaguildsJar))
+    if (lumaguildsJar != null) {
+        if (!File(lumaguildsJar).exists()) {
+            error("LumaGuilds API jar not found at: $lumaguildsJar")
+        }
+        compileOnly(files(lumaguildsJar))
+    } else {
+        compileOnly("com.github.BadgersMC:LumaGuilds:v2.1.0")
+    }
 
     // PlaceholderAPI (provided by server)
     compileOnly("me.clip:placeholderapi:2.11.6")
@@ -44,6 +47,9 @@ dependencies {
     // Testing
     testImplementation("org.junit.jupiter:junit-jupiter:5.11.4")
     testImplementation("io.mockk:mockk:1.13.13")
+    // Paper API on the TEST runtime classpath — unit tests load classes that
+    // reference Bukkit types even when the code under test never calls them.
+    testImplementation("io.papermc.paper:paper-api:1.21.11-R0.1-SNAPSHOT")
 }
 
 kotlin {

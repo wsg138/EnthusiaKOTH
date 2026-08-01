@@ -42,6 +42,36 @@ class KothService(
     private val zoneBorderService: ZoneBorderService,
     private val lang: net.badgersmc.nexus.i18n.LangService,
 ) {
+    companion object {
+        /**
+         * Calculate the moving capture point along a square path.
+         * The point travels the perimeter of a square of side `squareSize`
+         * centered on (centerX, centerZ), at `speedBlocksPerSecond`.
+         * Pure function — no Bukkit access — unit tested.
+         */
+        internal fun movingPointAt(
+            elapsedSeconds: Double,
+            squareSize: Double,
+            speedBlocksPerSecond: Double,
+            centerX: Double,
+            centerZ: Double,
+        ): Pair<Double, Double> {
+            val size = squareSize.coerceAtLeast(0.1)
+            val half = size / 2.0
+            val perimeter = size * 4.0
+            val distance = (elapsedSeconds.coerceAtLeast(0.0) * speedBlocksPerSecond) % perimeter
+
+            // Four edges of the square path, starting at the top-left corner:
+            // top (left→right), right (top→bottom), bottom (right→left), left (bottom→top)
+            return when {
+                distance < size -> (centerX - half + distance) to (centerZ - half)
+                distance < size * 2.0 -> (centerX + half) to (centerZ - half + (distance - size))
+                distance < size * 3.0 -> (centerX + half - (distance - size * 2.0)) to (centerZ + half)
+                else -> (centerX - half) to (centerZ + half - (distance - size * 3.0))
+            }
+        }
+    }
+
     @Volatile var activeEvent: KothEvent? = null
     private val reminderCounters = mutableMapOf<String, Int>()
     private val eventQueue = mutableListOf<QueuedEvent>()
@@ -211,6 +241,7 @@ class KothService(
         val arena = event.arena
         return Bukkit.getOnlinePlayers().filter { p ->
             p.isValid && !p.isDead && p.gameMode != GameMode.SPECTATOR
+                    && (!event.isPrivateTest || event.isParticipant(p.uniqueId))
                     && arena.zone.contains(p.location)
         }
     }
@@ -225,51 +256,40 @@ class KothService(
         val (px, _, pz) = point
         return Bukkit.getOnlinePlayers().filter { p ->
             p.isValid && !p.isDead && p.gameMode != GameMode.SPECTATOR
+                    && (!event.isPrivateTest || event.isParticipant(p.uniqueId))
                     && p.world.name == arena.zone.worldName
                     && p.location.distanceSquared(org.bukkit.Location(world, px, p.location.y, pz)) <= radiusSq
         }
     }
 
-    /** Calculate the moving point along a square path */
+    /**
+     * Calculate the moving point along a square path
+     */
     private fun calculateMovingPoint(event: KothEvent): Triple<Double, Double, Double> {
         val arena = event.arena
         val world = Bukkit.getWorld(arena.zone.worldName)
         if (world == null) return Triple(0.0, 80.0, 0.0)
         val centerLoc = event.arena.zone.center(world)
-        val half = arena.movingSquareSize / 2.0
-        val perimeter = arena.movingSquareSize * 4.0
         val elapsed = (System.currentTimeMillis() - event.startsAt.toEpochMilli()).coerceAtLeast(0) / 1000.0
-        val distance = (elapsed * arena.movingSpeedBlocksPerSecond) % perimeter
-
-        val cx = centerLoc.x
-        val cz = centerLoc.z
-        val (px, pz) = when {
-            distance <= half -> cx to (cz - distance)
-            distance <= half + arena.movingSquareSize -> (cx + distance - half) to (cz - half)
-            distance <= half + arena.movingSquareSize * 2.0 -> (cx + half) to (cz - half + (distance - half - arena.movingSquareSize))
-            distance <= half + arena.movingSquareSize * 3.0 -> (cx + half - (distance - half - arena.movingSquareSize * 2.0)) to (cz + half)
-            else -> (cx - (distance - half - arena.movingSquareSize * 3.0)) to (cz + half)
-        }
+        val (px, pz) = movingPointAt(
+            elapsedSeconds = elapsed,
+            squareSize = arena.movingSquareSize,
+            speedBlocksPerSecond = arena.movingSpeedBlocksPerSecond,
+            centerX = centerLoc.x,
+            centerZ = centerLoc.z,
+        )
         return Triple(px, centerLoc.y, pz)
     }
 
     /** Determines winner based on family rules */
     private fun resolveWinner(event: KothEvent): TeamId? {
-        val arena = event.arena
-        return when (arena.family.lowercase()) {
-            "conquest" -> {
-                // Highest score wins; no capture threshold
-                val (winner, score) = event.scores.maxByOrNull { it.value } ?: return null
-                if (score <= 0.0) return null
-                val tied = event.scores.count { it.value == score }
-                if (tied > 1) return null
-                winner
-            }
-            else -> {
-                // CAPTURE / MOVING — controller who reached capture threshold
-                event.currentController
-            }
-        }
+        // All families: on timeout the winner is the team with the HIGHEST
+        // capture progress — not whoever happens to be standing in the zone.
+        val (winner, score) = event.scores.maxByOrNull { it.value } ?: return null
+        if (score <= 0.0) return null
+        val tied = event.scores.count { it.value == score }
+        if (tied > 1) return null
+        return winner
     }
 
     private fun performLeave(event: KothEvent, cfg: EnthusiaKothConfig) {
@@ -315,17 +335,20 @@ class KothService(
             val capMsg = lang.msg("koth.capture", "captured" to name, "koth_name" to event.arena.id)
             Bukkit.broadcast(capMsg)
 
-            // Track win
-            val statKey = if (winner.mode == TeamMode.GUILD) {
-                "guild:${winner.id}"
-            } else {
-                "solo:${winner.id}"
-            }
-            stats.incrementWin(statKey, event.arena.id)
-            stats.save()
+            // Private tests are practice — no stats, rewards, Discord, fireworks
+            if (!event.isPrivateTest) {
+                // Track win
+                val statKey = if (winner.mode == TeamMode.GUILD) {
+                    "guild:${winner.id}"
+                } else {
+                    "solo:${winner.id}"
+                }
+                stats.incrementWin(statKey, event.arena.id)
+                stats.save()
 
-            // Execute reward commands (FactionsKore style)
-            executeRewards(event, winner)
+                // Execute reward commands (FactionsKore style)
+                executeRewards(event, winner)
+            }
         }
 
         // Capture wasContested BEFORE clearing scores
@@ -340,8 +363,8 @@ class KothService(
         displayService.clear()
         zoneBorderService.hide()
 
-        // Discord capture announcement + fireworks
-        if (winner != null) {
+        // Discord capture announcement + fireworks (skipped for private tests)
+        if (winner != null && !event.isPrivateTest) {
             discordWebhook.sendCapture(event.arena.id, winner, wasContested)
             fireworkService.celebrate(event.arena.zone)
         }
@@ -354,6 +377,21 @@ class KothService(
         val arena = event.arena
         val name = sanitizeName(teamName(winner))
         val guildId = if (winner.mode == TeamMode.GUILD) winner.id else null
+
+        // Vault-style family rewards (rewards.<family>.solo/guild-vault-money)
+        val cfg = cfgLoader()
+        val familyReward = cfg.rewards[arena.family.lowercase()]
+        if (familyReward != null) {
+            if (winner.mode == TeamMode.GUILD && familyReward.guildVaultMoney > 0.0) {
+                guilds.depositToVault(winner.id, familyReward.guildVaultMoney, "KOTH win reward")
+            } else if (winner.mode == TeamMode.SOLO && familyReward.soloVaultMoney > 0.0) {
+                // Solo winners get paid via the economy command (no guild vault)
+                Bukkit.dispatchCommand(
+                    Bukkit.getConsoleSender(),
+                    "eco give $name ${familyReward.soloVaultMoney.toLong()}"
+                )
+            }
+        }
 
         for (cmd in arena.rewards) {
             if (executeBankReward(cmd, guildId)) continue // bank deposit — no console command
@@ -414,7 +452,13 @@ class KothService(
         return true
     }
 
-    fun startEvent(arena: KothArena, durationOverride: Int? = null, kind: EventKind = EventKind.STANDARD): Boolean {
+    fun startEvent(
+        arena: KothArena,
+        durationOverride: Int? = null,
+        kind: EventKind = EventKind.STANDARD,
+        paidByGuild: UUID? = null,
+        paidCost: Double = 0.0,
+    ): Boolean {
         if (activeEvent != null) return false
         val cfg = cfgLoader()
         if (!cfg.locks.state.allows(kind)) return false
@@ -426,6 +470,8 @@ class KothService(
             startsAt = now,
             endsAt = now.plusSeconds(duration.toLong()),
             state = EventState.ACTIVE,
+            paidByGuild = paidByGuild,
+            paidCost = paidCost,
         )
         activeEvent = event
         val beginMsg = lang.msg("koth.begin", "koth_name" to arena.id, "location" to locString(arena.zone))
@@ -461,6 +507,11 @@ class KothService(
 
     /** Returns a snapshot of all currently queued events. */
     fun queuedEvents(): List<QueuedEvent> = eventQueue.toList()
+
+    /** Drops all queued events (called on reload — queued arenas may be stale). */
+    fun clearQueue() {
+        eventQueue.clear()
+    }
 
     /** Start a private test KOTH with lobby and quick timing */
     fun startPrivateTest(arena: KothArena, ownerId: UUID, cfg: EnthusiaKothConfig): Boolean {
@@ -507,6 +558,7 @@ class KothService(
         val event = activeEvent ?: return false
         val endMsg = lang.msg("koth.ended", "koth_name" to event.arena.id)
         Bukkit.broadcast(endMsg)
+        refundPaidStart(event)
         event.state = EventState.CANCELLED
         event.clearScores()
         event.currentController = null
@@ -515,6 +567,14 @@ class KothService(
         displayService.clear()
         zoneBorderService.hide()
         return true
+    }
+
+    /** Refund the guild if this event was started with a paid start. */
+    private fun refundPaidStart(event: KothEvent) {
+        val guildId = event.paidByGuild ?: return
+        val cost = event.paidCost
+        if (cost <= 0.0) return
+        guilds.depositToVault(guildId, cost, "KOTH start refund")
     }
 
     private fun resolveTeams(players: List<Player>, arena: KothArena): List<TeamId> {

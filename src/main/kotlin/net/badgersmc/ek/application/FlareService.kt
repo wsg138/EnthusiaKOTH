@@ -47,7 +47,7 @@ class FlareService(
         return meta.persistentDataContainer.get(FLARE_KOTH_KEY, PersistentDataType.STRING)
     }
 
-    fun handleFlareUse(player: Player, item: ItemStack): Boolean {
+    fun handleFlareUse(player: Player, item: ItemStack, offHand: Boolean): Boolean {
         val kothName = getFlareKothName(item) ?: return false
         val arena = arenas()[kothName] ?: return false
 
@@ -65,9 +65,16 @@ class FlareService(
         val started = kothService.startEvent(arena)
         if (!started) return true
 
+        // Consume from the hand the flare was used from — clearing the wrong
+        // slot (e.g. main hand when the last offhand flare was used) would
+        // delete an unrelated item.
         item.amount -= 1
         if (item.amount <= 0) {
-            player.inventory.setItemInMainHand(null)
+            if (offHand) {
+                player.inventory.setItemInOffHand(null)
+            } else {
+                player.inventory.setItemInMainHand(null)
+            }
         }
 
         player.sendMessage(lang.msg("flare.started", "koth" to kothName))

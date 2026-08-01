@@ -58,10 +58,19 @@ class ConfigLoader(private val plugin: JavaPlugin) {
             val c1 = Location(world, ac.center.x - half, ac.center.y - ac.radius, ac.center.z - half)
             val c2 = Location(world, ac.center.x + half, ac.center.y + ac.radius, ac.center.z + half)
             val zone = CaptureZone(id = id, worldName = ac.world, corner1 = c1, corner2 = c2, radius = ac.radius)
+            // The protected-region boundary (a separate, larger cuboid) is used
+            // for terrain protection — not capture.
+            val protectedRegion = CaptureZone(
+                id = "${id}_protected",
+                worldName = ac.world,
+                corner1 = Location(world, ac.protectedRegion.corner1.x, ac.protectedRegion.corner1.y, ac.protectedRegion.corner1.z),
+                corner2 = Location(world, ac.protectedRegion.corner2.x, ac.protectedRegion.corner2.y, ac.protectedRegion.corner2.z),
+            )
             id to KothArena(
                 id = id,
                 family = ac.family,
                 zone = zone,
+                protectedRegion = protectedRegion,
                 durationSeconds = ac.durationSeconds,
                 captureSeconds = ac.captureSeconds,
                 leaveBehavior = runCatching { CaptureLeaveBehavior.valueOf(ac.leaveBehavior.uppercase()) }

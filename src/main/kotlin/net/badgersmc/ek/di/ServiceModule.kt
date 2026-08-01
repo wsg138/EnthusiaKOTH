@@ -54,6 +54,7 @@ class ServiceModule(private val plugin: EnthusiaKothPlugin) {
     fun reload() {
         kothService.shutdown()
         scheduleService.reset()
+        kothService.clearQueue()
         restrictionService.clear()
         configLoader.reload()
         _config = configLoader.load()
@@ -176,6 +177,7 @@ class ServiceModule(private val plugin: EnthusiaKothPlugin) {
 
     val papiExpansion = KothPlaceholderExpansion(
         kothService = kothService,
+        scheduleService = scheduleService,
         stats = statsRepository,
         guilds = lumaGuildsAdapter,
         arenas = { arenas() },

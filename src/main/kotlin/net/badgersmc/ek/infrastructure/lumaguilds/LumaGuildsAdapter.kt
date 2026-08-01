@@ -72,6 +72,13 @@ class LumaGuildsAdapter {
         return lk.bankDeposit(guildId, guildId, units, reason)
     }
 
+    fun withdrawFromVault(guildId: UUID, amount: Double, reason: String): Boolean {
+        val lk = lookup ?: return false
+        val units = amount.toLong()
+        if (units <= 0) return false
+        return lk.bankWithdraw(guildId, guildId, units, reason)
+    }
+
     fun getBalance(guildId: UUID): Long {
         val lk = lookup ?: return 0L
         return lk.getBankBalance(guildId)

@@ -7,7 +7,7 @@ import java.util.concurrent.ConcurrentHashMap
 /**
  * An active KOTH event with state machine and score tracking.
  */
-class KothEvent(
+data class KothEvent(
     val id: UUID,
     val arena: KothArena,
     val startsAt: Instant,
@@ -16,6 +16,9 @@ class KothEvent(
     val owner: UUID? = null, // non-null = private test
     val isPrivateTest: Boolean = false,
     val lobbySeconds: Int = 0,
+    // Paid-start bookkeeping: guild charged for a manual start, refunded on stop
+    val paidByGuild: UUID? = null,
+    val paidCost: Double = 0.0,
 ) {
     val scores: MutableMap<TeamId, Double> = ConcurrentHashMap()
     val participants: MutableSet<UUID> = ConcurrentHashMap.newKeySet()
@@ -39,6 +42,7 @@ data class KothArena(
     val id: String,
     val family: String,
     val zone: CaptureZone,
+    val protectedRegion: CaptureZone? = null,
     val durationSeconds: Int,
     val captureSeconds: Int,
     val leaveBehavior: CaptureLeaveBehavior = CaptureLeaveBehavior.RESET,

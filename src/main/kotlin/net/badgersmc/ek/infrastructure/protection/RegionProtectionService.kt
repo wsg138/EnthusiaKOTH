@@ -11,10 +11,14 @@ class RegionProtectionService(
 ) {
     /**
      * Returns true if the given location falls within any arena's protected region.
+     * An arena protects BOTH its capture zone and its (typically larger)
+     * configured protected-region boundary — the capture zone alone was letting
+     * players build/grief just outside the cap point.
      */
     fun isProtected(location: Location): Boolean {
         return arenas().values.any { arena ->
             arena.zone.contains(location)
+                    || arena.protectedRegion?.contains(location) == true
         }
     }
 }

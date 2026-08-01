@@ -34,7 +34,7 @@ class KothListeners(
         val item = event.item ?: return
         if (item.type == Material.AIR) return
 
-        val handled = flareService.handleFlareUse(event.player, item)
+        val handled = flareService.handleFlareUse(event.player, item, event.hand == org.bukkit.inventory.EquipmentSlot.OFF_HAND)
         if (handled) event.isCancelled = true
     }
 

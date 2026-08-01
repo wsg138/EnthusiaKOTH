@@ -1,6 +1,6 @@
 package net.badgersmc.ek.domain
 
-enum class EventKind { STANDARD, PRIVATE_TEST }
+enum class EventKind { STANDARD, SCHEDULED, PRIVATE_TEST }
 
 enum class EventState { SCHEDULED, QUEUED, STARTING, ACTIVE, ENDING, COMPLETED, CANCELLED }
 
@@ -10,6 +10,8 @@ enum class TeamMode { SOLO, GUILD }
 
 enum class LockState(val allows: (kind: EventKind) -> Boolean) {
     UNLOCKED({ true }),
-    MANUAL_LOCKED({ it == EventKind.PRIVATE_TEST }),
+    // Manual lock blocks only manually-started KOTHs (commands, flares);
+    // scheduled rotations and private tests still run.
+    MANUAL_LOCKED({ it == EventKind.SCHEDULED || it == EventKind.PRIVATE_TEST }),
     ALL_LOCKED({ false }),
 }

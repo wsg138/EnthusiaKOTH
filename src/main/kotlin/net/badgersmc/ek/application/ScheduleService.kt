@@ -1,6 +1,7 @@
 package net.badgersmc.ek.application
 
 import net.badgersmc.ek.config.EnthusiaKothConfig
+import net.badgersmc.ek.domain.EventKind
 import net.badgersmc.ek.domain.KothArena
 import net.badgersmc.ek.toComponent
 import org.bukkit.Bukkit
@@ -23,6 +24,22 @@ class ScheduleService(
     private val arenas: () -> Map<String, KothArena>,
     private val lang: net.badgersmc.nexus.i18n.LangService,
 ) {
+    companion object {
+        /**
+         * Parses an "HH:mm" schedule entry, validating the ranges so an invalid
+         * config value (e.g. "25:99") degrades to "skip" instead of throwing.
+         * Pure function — unit tested.
+         */
+        internal fun parseScheduleTime(timeStr: String, now: ZonedDateTime, zone: ZoneId): ZonedDateTime? {
+            val parts = timeStr.split(":")
+            if (parts.size != 2) return null
+            val hour = parts[0].toIntOrNull() ?: return null
+            val minute = parts[1].toIntOrNull() ?: return null
+            if (hour !in 0..23 || minute !in 0..59) return null
+            return ZonedDateTime.of(now.toLocalDate(), LocalTime.of(hour, minute), zone)
+        }
+    }
+
     private var plannedDate: LocalDate? = null
     private var dailyOrder: List<KothArena> = emptyList()
     private val lastTriggered = mutableMapOf<String, String>()
@@ -51,11 +68,7 @@ class ScheduleService(
         val allArenas = arenas().values
         for (arena in allArenas) {
             for (timeStr in arena.schedule) {
-                val parts = timeStr.split(":")
-                if (parts.size != 2) continue
-                val hour = parts[0].toIntOrNull() ?: continue
-                val minute = parts[1].toIntOrNull() ?: continue
-                val scheduled = ZonedDateTime.of(now.toLocalDate(), LocalTime.of(hour, minute), cfg.schedule.zone)
+                val scheduled = parseScheduleTime(timeStr, now, cfg.schedule.zone) ?: continue
                 val warning = scheduled.minusSeconds(cfg.schedule.preStartWarningSeconds.toLong())
 
                 // Warning
@@ -78,7 +91,7 @@ class ScheduleService(
                     val key = "${arena.id}@${scheduled}"
                     if (key != lastTriggered[key]) {
                         lastTriggered[key] = key
-                        kothService.queueStart(arena)
+                        kothService.queueStart(arena, EventKind.SCHEDULED)
                     }
                 }
             }
@@ -88,11 +101,7 @@ class ScheduleService(
         val times = cfg.schedule.times
         for ((i, timeStr) in times.withIndex()) {
             if (i >= dailyOrder.size) continue
-            val parts = timeStr.split(":")
-            if (parts.size != 2) continue
-            val hour = parts[0].toIntOrNull() ?: continue
-            val minute = parts[1].toIntOrNull() ?: continue
-            val scheduled = ZonedDateTime.of(now.toLocalDate(), LocalTime.of(hour, minute), cfg.schedule.zone)
+            val scheduled = parseScheduleTime(timeStr, now, cfg.schedule.zone) ?: continue
             val warning = scheduled.minusSeconds(cfg.schedule.preStartWarningSeconds.toLong())
 
             if (cfg.schedule.preStartWarningSeconds > 0
@@ -110,7 +119,7 @@ class ScheduleService(
                 if (key != lastTriggered[key] && i < dailyOrder.size) {
                     lastTriggered[key] = key
                     val arena = dailyOrder[i]
-                    kothService.queueStart(arena)
+                    kothService.queueStart(arena, EventKind.SCHEDULED)
                 }
             }
         }
@@ -131,11 +140,7 @@ class ScheduleService(
         var earliest: ZonedDateTime? = null
         for (arena in arenas().values) {
             for (timeStr in arena.schedule) {
-                val parts = timeStr.split(":")
-                if (parts.size != 2) continue
-                val hour = parts[0].toIntOrNull() ?: continue
-                val minute = parts[1].toIntOrNull() ?: continue
-                var time = ZonedDateTime.of(now.toLocalDate(), LocalTime.of(hour, minute), cfg.schedule.zone)
+                var time = parseScheduleTime(timeStr, now, cfg.schedule.zone) ?: continue
                 if (!time.isAfter(now)) time = time.plusDays(1)
                 if (earliest == null || time.isBefore(earliest)) earliest = time
             }
@@ -143,16 +148,55 @@ class ScheduleService(
 
         // Also check legacy schedule
         for (timeStr in cfg.schedule.times) {
-            val parts = timeStr.split(":")
-            if (parts.size != 2) continue
-            val hour = parts[0].toIntOrNull() ?: continue
-            val minute = parts[1].toIntOrNull() ?: continue
-            var time = ZonedDateTime.of(now.toLocalDate(), LocalTime.of(hour, minute), cfg.schedule.zone)
+            var time = parseScheduleTime(timeStr, now, cfg.schedule.zone) ?: continue
             if (!time.isAfter(now)) time = time.plusDays(1)
             if (earliest == null || time.isBefore(earliest)) earliest = time
         }
 
         return earliest?.toInstant()
+    }
+
+    /**
+     * Name and time of the next scheduled KOTH, for the %enthusiakoth_nextkoth%
+     * and %enthusiakoth_nextkothtime% placeholders. Returns (arenaId, timeLeft).
+     */
+    fun nextEventInfo(): Pair<String, String>? {
+        val cfg = cfgLoader()
+        val now = ZonedDateTime.now(cfg.schedule.zone)
+
+        var earliest: ZonedDateTime? = null
+        var earliestId: String? = null
+        for (arena in arenas().values) {
+            for (timeStr in arena.schedule) {
+                var time = parseScheduleTime(timeStr, now, cfg.schedule.zone) ?: continue
+                if (!time.isAfter(now)) time = time.plusDays(1)
+                if (earliest == null || time.isBefore(earliest)) {
+                    earliest = time
+                    earliestId = arena.id
+                }
+            }
+        }
+
+        // Legacy rotation: map the earliest daily time to the daily order arena
+        for (timeStr in cfg.schedule.times) {
+            var time = parseScheduleTime(timeStr, now, cfg.schedule.zone) ?: continue
+            if (!time.isAfter(now)) time = time.plusDays(1)
+            if (earliest == null || time.isBefore(earliest)) {
+                earliest = time
+                val idx = cfg.schedule.times.indexOf(timeStr)
+                earliestId = dailyOrder.getOrNull(idx)?.id ?: earliestId
+            }
+        }
+
+        if (earliest == null || earliestId == null) return null
+        val seconds = java.time.Duration.between(Instant.now(), earliest.toInstant()).toSeconds().coerceAtLeast(0)
+        return earliestId to formatDuration(seconds)
+    }
+
+    private fun formatDuration(totalSeconds: Long): String {
+        val m = totalSeconds / 60
+        val s = totalSeconds % 60
+        return if (m > 0) "${m}m ${s}s" else "${s}s"
     }
 
     fun reload() {

@@ -45,6 +45,9 @@ command:
     arena_not_found: "<prefix><red>Arena not found. Available: <koths>"
     invalid_lock: "<prefix><red>Invalid lock state. Valid: <states>"
     lock_set: "<prefix><green>Lock set to <yellow><state>."
+    no_guild: "<prefix><red>You must be in a guild to start a paid KOTH."
+    insufficient_funds: "<prefix><red>Your guild needs <yellow><cost> <red>to start this KOTH (balance: <yellow><balance><red>)."
+    payment_failed: "<prefix><red>Payment failed — KOTH not started."
 
   status:
     line: "<shadow:#000000:1><gray><strikethrough>----------------------------------------</strikethrough>"

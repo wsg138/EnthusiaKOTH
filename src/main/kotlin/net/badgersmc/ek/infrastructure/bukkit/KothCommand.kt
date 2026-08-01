@@ -175,7 +175,39 @@ class KothCommand(
         if (!sender.hasPermission("enthusiakoth.admin")) { sender.sendMessage(lang.msg("command.error.no_permission")); return }
         val arena = arenas()[arenaId]
         if (arena == null) { sender.sendMessage(lang.msg("command.error.koth_not_found", "koths" to arenas().keys.joinToString(", "))); return }
-        if (!kothService.startEvent(arena)) {
+
+        val cfg = cfgLoader()
+        val cost = cfg.manualStart.basicCost
+
+        // Paid starts: charge the starter's guild bank (LumaGuilds) before starting.
+        var paidByGuild: java.util.UUID? = null
+        if (cost > 0.0) {
+            if (sender !is Player) {
+                sender.sendMessage(lang.msg("command.error.not_a_player"))
+                return
+            }
+            val guildId = guilds.playerGuildId(sender)
+            if (guildId == null) {
+                sender.sendMessage(lang.msg("command.error.no_guild"))
+                return
+            }
+            val balance = guilds.getBalance(guildId)
+            if (balance < cost) {
+                sender.sendMessage(lang.msg("command.error.insufficient_funds", "cost" to cost.toString(), "balance" to balance.toString()))
+                return
+            }
+            if (!guilds.withdrawFromVault(guildId, cost, "KOTH start")) {
+                sender.sendMessage(lang.msg("command.error.payment_failed"))
+                return
+            }
+            paidByGuild = guildId
+        }
+
+        if (!kothService.startEvent(arena, paidByGuild = paidByGuild, paidCost = cost)) {
+            // Refund if the start failed after charging (e.g. race with another start)
+            if (paidByGuild != null && cost > 0.0) {
+                guilds.depositToVault(paidByGuild, cost, "KOTH start refund")
+            }
             sender.sendMessage(lang.msg(if (kothService.activeEvent != null) "command.error.already_active" else "command.error.locked"))
             return
         }
@@ -261,17 +293,27 @@ class KothCommand(
 
     private fun privateTest(sender: CommandSender, sub: String, arenaId: String) {
         if (sender !is Player) { sender.sendMessage(lang.msg("command.error.not_a_player")); return }
-        // Private tests occupy the single active-event slot — gate them behind a
-        // dedicated permission so unprivileged players can't lock out KOTHs.
-        if (!sender.hasPermission("enthusiakoth.privatetest")) {
-            sender.sendMessage(lang.msg("command.error.no_permission"))
-            return
-        }
         when (sub.lowercase()) {
-            "start" -> privateStart(sender, arenaId)
+            // Starting/cancelling occupies the single active-event slot and is
+            // the privileged action — require the dedicated permission.
+            "start" -> {
+                if (!sender.hasPermission("enthusiakoth.privatetest")) {
+                    sender.sendMessage(lang.msg("command.error.no_permission"))
+                    return
+                }
+                privateStart(sender, arenaId)
+            }
+            "cancel" -> {
+                if (!sender.hasPermission("enthusiakoth.privatetest")) {
+                    sender.sendMessage(lang.msg("command.error.no_permission"))
+                    return
+                }
+                privateCancel(sender)
+            }
+            // Joining/leaving an existing private test is a player action and
+            // must NOT require the admin start permission.
             "join" -> privateJoin(sender)
             "leave" -> privateLeave(sender)
-            "cancel" -> privateCancel(sender)
             else -> sender.sendMessage(lang.msg("private.usage"))
         }
     }
