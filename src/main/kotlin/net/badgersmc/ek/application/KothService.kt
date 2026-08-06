@@ -13,20 +13,23 @@ import net.badgersmc.ek.domain.TeamMode
 import net.badgersmc.ek.infrastructure.discord.DiscordWebhookService
 import net.badgersmc.ek.infrastructure.display.ZoneBorderService
 import net.badgersmc.ek.infrastructure.lumaguilds.LumaGuildsAdapter
+import net.badgersmc.ek.infrastructure.persistence.EventQueueStore
 import net.badgersmc.ek.infrastructure.persistence.SqlStatsRepository
-import net.badgersmc.ek.toComponent
 import org.bukkit.Bukkit
 import org.bukkit.GameMode
 import org.bukkit.entity.Player
+import java.time.Clock
 import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.ThreadLocalRandom
 import kotlin.math.min
 
 data class QueuedEvent(
-    val arena: KothArena,
+    val arenaId: String,
     val startSource: EventKind,
     val scheduledAt: Instant,
+    val attempts: Int = 0,
+    val nextAttemptAt: Instant = scheduledAt,
 )
 
 class KothService(
@@ -38,8 +41,15 @@ class KothService(
     private val discordWebhook: DiscordWebhookService,
     private val zoneBorderService: ZoneBorderService,
     private val lang: net.badgersmc.nexus.i18n.LangService,
+    private val arenaResolver: (String) -> KothArena?,
+    private val queueStore: EventQueueStore,
+    private val clock: Clock,
+    private val logger: (String, Throwable?) -> Unit,
 ) {
     companion object {
+        private const val MAX_QUEUE_ATTEMPTS = 60
+        private const val QUEUE_RETRY_SECONDS = 10L
+
         internal fun movingPointAt(
             elapsedSeconds: Double,
             squareSize: Double,
@@ -62,12 +72,16 @@ class KothService(
 
     @Volatile var activeEvent: KothEvent? = null
     private val reminderCounters = mutableMapOf<String, Int>()
-    private val eventQueue = mutableListOf<QueuedEvent>()
+    private val eventQueue = queueStore.load().toMutableList()
     private var discordLastUpdate: Long? = null
 
     fun tick() {
-        val event = activeEvent ?: return
-        val now = Instant.now()
+        val event = activeEvent
+        if (event == null) {
+            processQueue()
+            return
+        }
+        val now = clock.instant()
         val cfg = cfgLoader()
         when (event.state) {
             EventState.STARTING -> if (!now.isBefore(event.startsAt)) activateEvent(event, cfg)
@@ -90,7 +104,7 @@ class KothService(
 
     private fun tickActive(event: KothEvent, cfg: EnthusiaKothConfig) {
         val arena = event.arena
-        val now = Instant.now()
+        val now = clock.instant()
         if (!now.isBefore(event.endsAt)) {
             finishEvent(event, resolveWinner(event))
             return
@@ -222,7 +236,7 @@ class KothService(
     private fun calculateMovingPoint(event: KothEvent): Triple<Double, Double, Double> {
         val world = Bukkit.getWorld(event.arena.zone.worldName) ?: return Triple(0.0, 80.0, 0.0)
         val center = event.arena.zone.center(world)
-        val elapsed = (System.currentTimeMillis() - event.startsAt.toEpochMilli()).coerceAtLeast(0) / 1000.0
+        val elapsed = (clock.millis() - event.startsAt.toEpochMilli()).coerceAtLeast(0) / 1000.0
         val (x, z) = movingPointAt(
             elapsed,
             event.arena.movingSquareSize,
@@ -346,7 +360,7 @@ class KothService(
         if (activeEvent != null) return false
         val cfg = cfgLoader()
         if (!cfg.locks.state.allows(kind)) return false
-        val now = Instant.now()
+        val now = clock.instant()
         val start = now.plusSeconds(delaySeconds.coerceAtLeast(0).toLong())
         val event = KothEvent(
             id = UUID.randomUUID(),
@@ -361,21 +375,65 @@ class KothService(
     }
 
     @Synchronized
-    fun queueStart(arena: KothArena, kind: EventKind = EventKind.SCHEDULED): Boolean {
-        if (activeEvent == null) return startEvent(arena, kind = kind)
-        eventQueue.add(QueuedEvent(arena, kind, Instant.now()))
+    fun queueStart(
+        arena: KothArena,
+        kind: EventKind = EventKind.SCHEDULED,
+        scheduledAt: Instant = clock.instant(),
+    ): Boolean {
+        if (activeEvent == null && startEvent(arena, kind = kind)) return true
+        eventQueue += QueuedEvent(arena.id, kind, scheduledAt)
+        persistQueue()
         return true
     }
 
     @Synchronized
     fun processQueue() {
-        val next = eventQueue.removeFirstOrNull() ?: return
-        startEvent(next.arena, kind = next.startSource)
+        if (activeEvent != null) return
+        val next = eventQueue.firstOrNull() ?: return
+        val now = clock.instant()
+        if (now.isBefore(next.nextAttemptAt)) return
+        val arena = arenaResolver(next.arenaId)
+        if (arena == null) {
+            eventQueue.removeAt(0)
+            persistQueue()
+            logger("Removing permanently invalid queued KOTH '${next.arenaId}'", null)
+            return
+        }
+        if (startEvent(arena, kind = next.startSource)) {
+            eventQueue.removeAt(0)
+            persistQueue()
+            return
+        }
+        val attempts = next.attempts + 1
+        if (attempts >= MAX_QUEUE_ATTEMPTS) {
+            eventQueue.removeAt(0)
+            persistQueue()
+            logger("Removing queued KOTH '${next.arenaId}' after $attempts bounded startup retries", null)
+            return
+        }
+        eventQueue[0] = next.copy(
+            attempts = attempts,
+            nextAttemptAt = now.plusSeconds(QUEUE_RETRY_SECONDS),
+        )
+        persistQueue()
     }
 
     fun nextQueued(): QueuedEvent? = synchronized(this) { eventQueue.firstOrNull() }
     fun queuedEvents(): List<QueuedEvent> = synchronized(this) { eventQueue.toList() }
-    fun clearQueue() = synchronized(this) { eventQueue.clear() }
+
+    @Synchronized
+    fun clearQueue() {
+        eventQueue.clear()
+        persistQueue()
+    }
+
+    private fun persistQueue() {
+        try {
+            queueStore.save(eventQueue)
+        } catch (error: Throwable) {
+            logger("Failed to persist KOTH queue; restart recovery is at risk", error)
+        }
+    }
 
     @Synchronized
     fun startPrivateTest(arena: KothArena, ownerId: UUID, cfg: EnthusiaKothConfig): Boolean {
@@ -384,7 +442,7 @@ class KothService(
         val lobbySeconds = testing.lobbySeconds.coerceAtLeast(0)
         val duration = testing.quickMatchDurationSeconds.takeIf { it > 0 } ?: arena.durationSeconds
         val capture = testing.quickCaptureSeconds.takeIf { it > 0 } ?: arena.captureSeconds
-        val now = Instant.now()
+        val now = clock.instant()
         val event = KothEvent(
             id = UUID.randomUUID(),
             arena = arena.copy(durationSeconds = duration, captureSeconds = capture),
@@ -458,7 +516,7 @@ class KothService(
     }
 
     private fun eventRecipients(event: KothEvent): List<Player> = if (event.isPrivateTest) {
-        event.participants.mapNotNull(Bukkit::getPlayer)
+        event.participants.mapNotNull { Bukkit.getPlayer(it) }
     } else Bukkit.getOnlinePlayers().toList()
 
     private fun sendEventMessage(event: KothEvent, message: net.kyori.adventure.text.Component) {
@@ -475,5 +533,6 @@ class KothService(
 
     fun shutdown() {
         forceEnd()
+        persistQueue()
     }
 }

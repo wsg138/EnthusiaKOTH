@@ -21,6 +21,7 @@ import net.badgersmc.ek.infrastructure.discord.DiscordWebhookService
 import net.badgersmc.ek.infrastructure.display.ZoneBorderService
 import net.badgersmc.ek.infrastructure.lumaguilds.LumaGuildsAdapter
 import net.badgersmc.ek.infrastructure.papi.KothPlaceholderExpansion
+import net.badgersmc.ek.infrastructure.persistence.FileOperationalStateStore
 import net.badgersmc.ek.infrastructure.persistence.SqlStatsRepository
 import net.badgersmc.ek.infrastructure.protection.RegionProtectionListener
 import net.badgersmc.ek.infrastructure.protection.RegionProtectionService
@@ -32,10 +33,12 @@ import net.badgersmc.nexus.i18n.LangService
 import net.badgersmc.nexus.i18n.Locale as NexusLocale
 import org.bukkit.Bukkit
 import java.io.File
+import java.time.Clock
 import javax.sql.DataSource
 
 class ServiceModule(private val plugin: EnthusiaKothPlugin) {
     private val configLoader = ConfigLoader(plugin)
+    private val clock: Clock = Clock.systemUTC()
     @Volatile private var _config: EnthusiaKothConfig = configLoader.load()
     @Volatile private var _arenas: Map<String, KothArena> = configLoader.loadArenas()
 
@@ -50,13 +53,13 @@ class ServiceModule(private val plugin: EnthusiaKothPlugin) {
 
     fun reload() {
         kothService.shutdown()
-        scheduleService.reset()
-        kothService.clearQueue()
+        scheduleService.reload()
         restrictionService.clear()
         configLoader.reload()
         _config = configLoader.load()
         _arenas = configLoader.loadArenas()
         langService.reload()
+        kothService.processQueue()
     }
 
     private val dataSource: DataSource by lazy {
@@ -69,6 +72,15 @@ class ServiceModule(private val plugin: EnthusiaKothPlugin) {
         }
         HikariDataSource(cfg)
     }
+
+    private val operationalState = FileOperationalStateStore(
+        scheduleFile = File(plugin.dataFolder, "schedule-state.dat"),
+        queueFile = File(plugin.dataFolder, "event-queue.dat"),
+        logger = { message, error ->
+            plugin.logger.severe(message)
+            error?.let { plugin.logger.severe(it.stackTraceToString()) }
+        },
+    )
 
     val lumaGuildsAdapter = LumaGuildsAdapter()
     val langService = LangService(plugin, NexusLocale("en_US"), net.badgersmc.ek.infrastructure.i18n.KothLang::class.java)
@@ -97,6 +109,13 @@ class ServiceModule(private val plugin: EnthusiaKothPlugin) {
         discordWebhook = discordWebhook,
         zoneBorderService = zoneBorderService,
         lang = langService,
+        arenaResolver = { arenas()[it] },
+        queueStore = operationalState,
+        clock = clock,
+        logger = { message, error ->
+            plugin.logger.severe(message)
+            error?.let { plugin.logger.severe(it.stackTraceToString()) }
+        },
     )
     val vaultEconomy = VaultEconomyAdapter(plugin)
     val startService = StartService(
@@ -116,7 +135,20 @@ class ServiceModule(private val plugin: EnthusiaKothPlugin) {
         cfgLoader = { config() },
         kothService = kothService,
         arenas = { arenas() },
-        lang = langService,
+        stateStore = operationalState,
+        clock = clock,
+        warningSink = { arenaId, minutes ->
+            Bukkit.getOnlinePlayers().forEach { player ->
+                player.sendMessage(
+                    langService.msg(
+                        "koth.warning_minutes",
+                        "koth_name" to arenaId,
+                        "minutes" to minutes.toString(),
+                    ),
+                )
+            }
+        },
+        logger = plugin.logger::warning,
     )
     val flareService = FlareService(
         cfgLoader = { config() },
@@ -159,6 +191,7 @@ class ServiceModule(private val plugin: EnthusiaKothPlugin) {
         statsRepository,
         lumaGuildsAdapter,
         { arenas() },
+        clock,
     ).also {
         if (Bukkit.getPluginManager().getPlugin("PlaceholderAPI") != null) it.register()
     }
