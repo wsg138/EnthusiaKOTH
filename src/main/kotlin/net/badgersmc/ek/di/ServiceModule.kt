@@ -84,7 +84,17 @@ class ServiceModule(private val plugin: EnthusiaKothPlugin) {
 
     val lumaGuildsAdapter = LumaGuildsAdapter()
     val langService = LangService(plugin, NexusLocale("en_US"), net.badgersmc.ek.infrastructure.i18n.KothLang::class.java)
-    val statsRepository = SqlStatsRepository(dataSource).also { it.init() }
+    val statsRepository = SqlStatsRepository(
+        dataSource = dataSource,
+        familyResolver = { arenaId -> arenas()[arenaId]?.family ?: arenaId },
+        legacyStatsFile = File(plugin.dataFolder, "stats.yml"),
+        logger = { message, error ->
+            if (error == null) plugin.logger.info(message) else {
+                plugin.logger.severe(message)
+                plugin.logger.severe(error.stackTraceToString())
+            }
+        },
+    ).also { it.init() }
     val fireworkService = FireworkCelebrationService(plugin)
     val discordWebhook = DiscordWebhookService(
         plugin,
