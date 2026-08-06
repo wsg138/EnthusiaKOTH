@@ -1,0 +1,36 @@
+name: EnthusiaKOTH
+version: '0.2.0'
+main: net.badgersmc.ek.EnthusiaKothPlugin
+api-version: '1.21'
+authors: [BadgersMC]
+description: Modular KOTH framework for Enthusia, powered by Nexus.
+
+dependencies:
+  server:
+    LumaGuilds:
+      load: BEFORE
+      required: true
+      join-classpath: true
+    PlaceholderAPI:
+      load: BEFORE
+      required: false
+      join-classpath: true
+    Vault:
+      load: BEFORE
+      required: false
+      join-classpath: true
+
+permissions:
+  enthusiakoth.command:
+    default: true
+    description: Use /ekoth
+  enthusiakoth.admin:
+    default: op
+    description: Administrative KOTH commands
+    children:
+      enthusiakoth.command: true
+  enthusiakoth.player:
+    default: true
+    description: Player KOTH commands
+    children:
+      enthusiakoth.command: true

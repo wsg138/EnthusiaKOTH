@@ -1,0 +1,47 @@
+name: Build
+
+on:
+  push:
+    branches: [main, kotlin-rewrite]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Setup Gradle cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle.kts') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Build + test (shadowJar)
+        # LumaGuilds API resolves from JitPack (BadgersMC/LumaGuilds:v2.1.0)
+        # when LUMAGUILDS_JAR is not provided; Nexus comes from JitPack too.
+        run: |
+          chmod +x gradlew
+          ./gradlew build --no-daemon
+
+      - name: Upload KOTH jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: EnthusiaKOTH
+          path: build/libs/EnthusiaKOTH-*-all.jar
+          if-no-files-found: error
