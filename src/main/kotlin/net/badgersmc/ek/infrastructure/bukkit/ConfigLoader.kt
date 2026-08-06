@@ -15,17 +15,17 @@ import org.bukkit.plugin.java.JavaPlugin
 import java.time.ZoneId
 
 class ConfigLoader(private val plugin: JavaPlugin) {
-
     fun load(): EnthusiaKothConfig {
         val config = plugin.config
+        val zone = runCatching { ZoneId.of(config.getString("general.timezone", "America/New_York")) }
+            .getOrElse {
+                plugin.logger.warning("EnthusiaKOTH: invalid general.timezone '${config.getString("general.timezone")}', falling back to America/New_York")
+                ZoneId.of("America/New_York")
+            }
         return EnthusiaKothConfig(
-            timezone = runCatching { ZoneId.of(config.getString("general.timezone", "America/New_York")) }
-                .getOrElse {
-                    plugin.logger.warning("EnthusiaKOTH: invalid general.timezone '${config.getString("general.timezone")}', falling back to America/New_York")
-                    ZoneId.of("America/New_York")
-                },
+            timezone = zone,
             manualStart = ManualStartConfigLoader.load(config),
-            schedule = ScheduleConfigLoader.load(config),
+            schedule = ScheduleConfigLoader.load(config, zone),
             flares = FlareConfigLoader.load(config),
             progressBar = ProgressBarConfigLoader.load(config),
             reminders = ReminderConfigLoader.load(config),
@@ -44,22 +44,18 @@ class ConfigLoader(private val plugin: JavaPlugin) {
         val cfg = load()
         return cfg.arenas.filter { it.value.enabled }.mapNotNull { (id, ac) ->
             val world = Bukkit.getWorld(ac.world) ?: run {
-                Bukkit.getLogger().warning("EnthusiaKOTH: World '${ac.world}' not found for arena '$id'")
+                plugin.logger.warning("EnthusiaKOTH: World '${ac.world}' not found for arena '$id'")
                 return@mapNotNull null
             }
-            // Capture/moving zone is derived from center + radius (NOT the
-            // protected-region cuboid, which is the much larger protection
-            // boundary). Using protected-region corners made players able to
-            // capture from anywhere in a 64×384×64 box.
             val isMoving = ac.family.equals("moving", ignoreCase = true)
-            // MOVING: the zone bounds the roaming path (square), capture radius
-            // is applied per-point. CAPTURE/CONQUEST: zone = center ± radius.
             val half = if (isMoving) ac.movingSquareSize / 2.0 else ac.radius
-            val c1 = Location(world, ac.center.x - half, ac.center.y - ac.radius, ac.center.z - half)
-            val c2 = Location(world, ac.center.x + half, ac.center.y + ac.radius, ac.center.z + half)
-            val zone = CaptureZone(id = id, worldName = ac.world, corner1 = c1, corner2 = c2, radius = ac.radius)
-            // The protected-region boundary (a separate, larger cuboid) is used
-            // for terrain protection — not capture.
+            val zone = CaptureZone(
+                id = id,
+                worldName = ac.world,
+                corner1 = Location(world, ac.center.x - half, ac.center.y - ac.radius, ac.center.z - half),
+                corner2 = Location(world, ac.center.x + half, ac.center.y + ac.radius, ac.center.z + half),
+                radius = ac.radius,
+            )
             val protectedRegion = CaptureZone(
                 id = "${id}_protected",
                 worldName = ac.world,
@@ -92,7 +88,7 @@ class ConfigLoader(private val plugin: JavaPlugin) {
         }.toMap()
     }
 
-    fun reload() { plugin.reloadConfig() }
+    fun reload() = plugin.reloadConfig()
 }
 
 private fun cs(config: ConfigurationSection, path: String): ConfigurationSection? = config.getConfigurationSection(path)
@@ -102,26 +98,24 @@ private fun cdd(config: ConfigurationSection, path: String, def: Double): Double
 private fun cds(config: ConfigurationSection, path: String, def: String): String = config.getString(path) ?: def
 private fun cl(config: ConfigurationSection, path: String): List<String> = config.getStringList(path)
 
-private fun loadPos(c: ConfigurationSection, path: String, defX: Double = 0.0, defY: Double = 80.0, defZ: Double = 0.0) = cs(c, path)?.let { sec ->
-    net.badgersmc.ek.config.PositionConfig(
-        x = cdd(sec, "x", defX),
-        y = cdd(sec, "y", defY),
-        z = cdd(sec, "z", defZ),
-    )
-} ?: net.badgersmc.ek.config.PositionConfig(defX, defY, defZ)
+private fun loadPos(c: ConfigurationSection, path: String, defX: Double = 0.0, defY: Double = 80.0, defZ: Double = 0.0) =
+    cs(c, path)?.let { sec ->
+        net.badgersmc.ek.config.PositionConfig(cdd(sec, "x", defX), cdd(sec, "y", defY), cdd(sec, "z", defZ))
+    } ?: net.badgersmc.ek.config.PositionConfig(defX, defY, defZ)
 
 private object ManualStartConfigLoader {
     fun load(c: FileConfiguration) = net.badgersmc.ek.config.ManualStartConfig(
-        enabled = true,
+        enabled = cbi(c, "manual-start.enabled", true),
         basicCost = cdd(c, "manual-start.basic-cost", 0.0),
         advancedCost = cdd(c, "manual-start.advanced-cost", 0.0),
+        delaySeconds = cdi(c, "manual-start.delay-seconds", 0).coerceAtLeast(0),
     )
 }
 
 private object ScheduleConfigLoader {
-    fun load(c: FileConfiguration) = net.badgersmc.ek.config.ScheduleConfig(
+    fun load(c: FileConfiguration, zone: ZoneId) = net.badgersmc.ek.config.ScheduleConfig(
         enabled = cbi(c, "schedule.enabled", false),
-        zone = ZoneId.of(cds(c, "general.timezone", "America/New_York")),
+        zone = zone,
         preStartWarningSeconds = cdi(c, "schedule.pre-start-warning-seconds", 300),
         times = cl(c, "schedule.times").ifEmpty { listOf("00:00", "08:00", "16:00") },
     )
@@ -134,6 +128,14 @@ private object FlareConfigLoader {
             material = cds(c, "flares.item.material", "REDSTONE_TORCH"),
             name = cds(c, "flares.item.name", "{KOTH} Koth Flare"),
             lore = cl(c, "flares.item.lore").ifEmpty { listOf("Right-Click to start a {KOTH} koth!") },
+        ),
+        messages = net.badgersmc.ek.config.FlareMessagesConfig(
+            giveFlare = cds(c, "flares.messages.give-flare", "&aGave &e{PLAYER} {AMOUNT} &akoth flares."),
+            receivedFlare = cds(c, "flares.messages.received-flare", "&aYou received a &e{KOTH} &akoth flare!"),
+            notInRegion = cds(c, "flares.messages.not-in-region", "&cYou must be on the &e{KOTH} &ccapture point to use the flare!"),
+            alreadyActive = cds(c, "flares.messages.already-active", "&cThe &e{KOTH} &ckoth is already active."),
+            startedWithFlare = cds(c, "flares.messages.started-with-flare", "&aStarted the &e{KOTH} &akoth with your flare."),
+            startedBroadcast = cds(c, "flares.messages.started-broadcast", "&e{PLAYER} &astarted the &e{KOTH} &akoth with a flare!"),
         ),
     )
 }
@@ -173,9 +175,9 @@ private object MessageConfigLoader {
 private object ArenaConfigLoader {
     fun load(c: FileConfiguration): Map<String, ArenaConfig> {
         val section = cs(c, "arenas") ?: return emptyMap()
-        return section.getKeys(false).associate { id ->
-            val base = section.getConfigurationSection(id) ?: return@associate id to ArenaConfig()
-            id to ArenaConfig(
+        return section.getKeys(false).associateWith { id ->
+            val base = section.getConfigurationSection(id) ?: return@associateWith ArenaConfig()
+            ArenaConfig(
                 enabled = cbi(base, "enabled", true),
                 family = cds(base, "family", "capture"),
                 world = cds(base, "world", "world"),
@@ -204,12 +206,10 @@ private object ArenaConfigLoader {
 
     private fun loadChanced(c: ConfigurationSection, path: String): Map<String, Double> {
         val sec = cs(c, path) ?: return emptyMap()
-        // YAML schema: percentage -> command ("20.0": "bank 50")
-        // Model: command -> chance percentage (Map<String, Double>)
         return buildMap {
-            for (key in sec.getKeys(false)) {
-                val command = sec.getString(key) ?: continue
-                val chance = key.toDoubleOrNull() ?: continue
+            sec.getKeys(false).forEach { key ->
+                val command = sec.getString(key) ?: return@forEach
+                val chance = key.toDoubleOrNull() ?: return@forEach
                 put(command, chance)
             }
         }
@@ -218,8 +218,8 @@ private object ArenaConfigLoader {
     private fun loadIntDoubleMap(c: ConfigurationSection, path: String): Map<Int, Double> {
         val sec = cs(c, path) ?: return emptyMap()
         return buildMap {
-            for (key in sec.getKeys(false)) {
-                val count = key.toIntOrNull() ?: continue
+            sec.getKeys(false).forEach { key ->
+                val count = key.toIntOrNull() ?: return@forEach
                 put(count, cdd(sec, key, 1.0))
             }
         }
@@ -229,9 +229,9 @@ private object ArenaConfigLoader {
 private object RewardConfigLoader {
     fun load(c: FileConfiguration): Map<String, net.badgersmc.ek.config.RewardConfig> {
         val section = cs(c, "rewards") ?: return emptyMap()
-        return section.getKeys(false).associate { family ->
+        return section.getKeys(false).associateWith { family ->
             val base = cs(c, "rewards.$family")
-            family to net.badgersmc.ek.config.RewardConfig(
+            net.badgersmc.ek.config.RewardConfig(
                 soloVaultMoney = if (base != null) cdd(base, "solo-vault-money", 0.0) else 0.0,
                 guildVaultMoney = if (base != null) cdd(base, "guild-vault-money", 0.0) else 0.0,
             )
@@ -259,14 +259,12 @@ private object PrivateTestingConfigLoader {
 
 private object LockConfigLoader {
     fun load(c: FileConfiguration) = net.badgersmc.ek.config.LockConfig(
-        state = try { LockState.valueOf(cds(c, "locks.state", "UNLOCKED")) } catch (_: IllegalArgumentException) { LockState.UNLOCKED },
+        state = runCatching { LockState.valueOf(cds(c, "locks.state", "UNLOCKED").uppercase()) }.getOrDefault(LockState.UNLOCKED),
     )
 }
 
 private object DisplayConfigLoader {
-    fun load(c: FileConfiguration) = net.badgersmc.ek.config.DisplayConfig(
-        zoneBorder = cbi(c, "display.zone-border", true),
-    )
+    fun load(c: FileConfiguration) = net.badgersmc.ek.config.DisplayConfig(cbi(c, "display.zone-border", true))
 }
 
 private object RulesConfigLoader {
@@ -282,8 +280,7 @@ private object RulesConfigLoader {
         val sec = cs(c, path) ?: return net.badgersmc.ek.infrastructure.restriction.RuleSet.PERMISSIVE
         return net.badgersmc.ek.infrastructure.restriction.RuleSet(
             elytraAllowed = cbi(sec, "elytra", true),
-            maceRule = try { MaceRule.valueOf(cds(sec, "mace", "FULLY_ALLOWED").uppercase()) }
-                catch (_: IllegalArgumentException) { MaceRule.FULLY_ALLOWED },
+            maceRule = runCatching { MaceRule.valueOf(cds(sec, "mace", "FULLY_ALLOWED").uppercase()) }.getOrDefault(MaceRule.FULLY_ALLOWED),
             spearAllowed = cbi(sec, "spear", true),
             enderPearlAllowed = cbi(sec, "ender-pearl", true),
             windChargeAllowed = cbi(sec, "wind-charge", true),

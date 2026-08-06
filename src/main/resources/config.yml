@@ -7,8 +7,10 @@ locks:
   state: "UNLOCKED"
 
 manual-start:
+  enabled: true
   basic-cost: 0.0
   advanced-cost: 0.0
+  delay-seconds: 0
 
 private-testing:
   lobby-seconds: 0
@@ -23,9 +25,6 @@ schedule:
     - "00:00"
     - "08:00"
     - "16:00"
-
-# FactionsKore-style per-arena schedules
-# Each arena can have its own schedule in arena config below
 
 flares:
   enabled: true
@@ -110,7 +109,6 @@ rules:
       ender-pearl-cooldown-seconds: 0
       wind-charge-cooldown-seconds: 0
 
-# Arena definitions — FactionsKore-inspired configuration
 arenas:
   capture:
     enabled: true
@@ -125,19 +123,12 @@ arenas:
     capture-seconds: 120
     leave-behavior: "RESET"
     decay-per-second: 1.0
-    # FactionsKore-style per-koth options
     ignore-factions: false
     contest-when-multiple-cappers: true
     flares-must-be-placed-on-cap: true
-    # FactionsKore-style per-koth HH:mm schedule
     schedule: []
-    # FactionsKore-style command rewards
-    # Use "bank <amount>" to deposit directly to the winning guild's vault (no console command needed)
-    # Use "give {PLAYER} diamond 1" for console commands
-    # Use "give {ALL_ONLINE} diamond 1" to run a command per online member
     rewards:
       - "bank 500"
-    # FactionsKore-style chanced rewards (percentage: command)
     chanced-rewards:
       "20.0": "bank 50"
   moving:
@@ -170,6 +161,10 @@ arenas:
     schedule: []
     rewards: []
     chanced-rewards: {}
+    capture-speed-bonuses:
+      1: 1.0
+      2: 1.5
+      3: 2.0
 
 rewards:
   capture:

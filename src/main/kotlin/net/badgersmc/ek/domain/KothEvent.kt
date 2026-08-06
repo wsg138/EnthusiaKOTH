@@ -4,21 +4,15 @@ import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
-/**
- * An active KOTH event with state machine and score tracking.
- */
 data class KothEvent(
     val id: UUID,
     val arena: KothArena,
     val startsAt: Instant,
     val endsAt: Instant,
     @Volatile var state: EventState = EventState.STARTING,
-    val owner: UUID? = null, // non-null = private test
+    val owner: UUID? = null,
     val isPrivateTest: Boolean = false,
     val lobbySeconds: Int = 0,
-    // Paid-start bookkeeping: guild charged for a manual start, refunded on stop
-    val paidByGuild: UUID? = null,
-    val paidCost: Double = 0.0,
 ) {
     val scores: MutableMap<TeamId, Double> = ConcurrentHashMap()
     val participants: MutableSet<UUID> = ConcurrentHashMap.newKeySet()
@@ -32,7 +26,6 @@ data class KothEvent(
     fun join(playerId: UUID): Boolean = participants.add(playerId)
     fun leave(playerId: UUID): Boolean = participants.remove(playerId)
     fun isOwner(playerId: UUID): Boolean = owner == playerId
-
     fun clearScores() { scores.clear() }
     fun addScore(team: TeamId, amount: Double) { scores.merge(team, amount, Double::plus) }
     fun setScore(team: TeamId, score: Double) { scores[team] = score }

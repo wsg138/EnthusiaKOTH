@@ -1,9 +1,3 @@
-# EnthusiaKOTH — en_US locale.
-# All values are MiniMessage strings unless marked as <legacy>.
-# Placeholders use <name> syntax, e.g. <player>, <koth>, <amount>, <state>.
-#
-# § codes are ALSO accepted for compatibility.
-
 prefix: "<gradient:#FF7272:#FFC976><shadow:#000000:1>[Koth]</shadow></gradient> "
 
 command:
@@ -13,7 +7,7 @@ command:
     schedule: "<prefix><green>/ekoth schedule <gray>- Show KOTH schedule"
     top: "<prefix><green>/ekoth top [page] <gray>- KOTH leaderboard"
     stats: "<prefix><green>/ekoth stats [player] <gray>- Your KOTH stats"
-    start: "<prefix><red>/ekoth start <arena> <gray>- Start a KOTH"
+    start: "<prefix><red>/ekoth start <arena> [basic|advanced] <gray>- Start a KOTH"
     stop: "<prefix><red>/ekoth stop <gray>- Force-end active KOTH"
     cancel: "<prefix><red>/ekoth cancel <gray>- Force-end active KOTH"
     giveflare: "<prefix><red>/ekoth giveflare <player> <arena> [amount] <gray>- Give flare"
@@ -23,8 +17,8 @@ command:
     private_usage: "<prefix><red>/ekoth private <start|join|leave|cancel> [arena]"
 
   success:
-    started: "<prefix><green>Started the <yellow><arena> <green>koth."
-    ended: "<prefix><green>Ended the active koth."
+    started: "<prefix><green>Started the <yellow><arena> <green>KOTH."
+    ended: "<prefix><green>Ended the active KOTH."
     started_from_gui: "<prefix><green>Started <yellow><arena> <green>from the GUI."
 
   error:
@@ -37,17 +31,21 @@ command:
     already_active: "<prefix><red>A KOTH is already active!"
     locked: "<prefix><red>Cannot start KOTH — check lock state."
     no_active: "<prefix><red>No active KOTH."
-    stats_self: "<prefix><green>You have won <yellow><wins> <green>koths."
-    stats_other: "<prefix><yellow><player> <green>has won <yellow><wins> <green>koths."
-    flare_given: "<prefix><green>Gave <yellow><player> <amount> <yellow><koth> <green>koth flares."
-    flare_received: "<prefix><green>You received <amount> <yellow><koth> <green>koth flares!"
+    stats_self: "<prefix><green>You have won <yellow><wins> <green>KOTHs."
+    stats_other: "<prefix><yellow><player> <green>has won <yellow><wins> <green>KOTHs."
+    flare_given: "<prefix><green>Gave <yellow><player> <amount> <yellow><koth> <green>KOTH flares."
+    flare_received: "<prefix><green>You received <amount> <yellow><koth> <green>KOTH flares!"
     reloaded: "<prefix><green>Configuration reloaded."
     arena_not_found: "<prefix><red>Arena not found. Available: <koths>"
     invalid_lock: "<prefix><red>Invalid lock state. Valid: <states>"
     lock_set: "<prefix><green>Lock set to <yellow><state>."
-    no_guild: "<prefix><red>You must be in a guild to start a paid KOTH."
-    insufficient_funds: "<prefix><red>Your guild needs <yellow><cost> <red>to start this KOTH (balance: <yellow><balance><red>)."
-    payment_failed: "<prefix><red>Payment failed — KOTH not started."
+    insufficient_funds: "<prefix><red>You need <yellow><cost> <red>to start this KOTH (balance: <yellow><balance><red>)."
+    payment_failed: "<prefix><red>Payment or startup failed — KOTH not started."
+    manual_start_disabled: "<prefix><red>Player-paid KOTH starts are disabled."
+    economy_unavailable: "<prefix><red>The Vault economy is unavailable; no money was charged."
+    refund_failed: "<prefix><red>The KOTH did not start and the automatic refund failed. Contact an administrator immediately."
+    concurrent_start: "<prefix><red>Another KOTH start is already being processed."
+    invalid_start_tier: "<prefix><red>Start tier must be basic or advanced."
 
   status:
     line: "<shadow:#000000:1><gray><strikethrough>----------------------------------------</strikethrough>"
@@ -59,7 +57,7 @@ command:
     next_scheduled: "<shadow:#000000:1><gray>Next scheduled: <green><time>"
 
   schedule:
-    header: "<shadow:#000000:1><strikethrough>-----</strikethrough><green><bold>Koth Schedule</bold><strikethrough>-----</strikethrough>"
+    header: "<shadow:#000000:1><strikethrough>-----</strikethrough><green><bold>KOTH Schedule</bold><strikethrough>-----</strikethrough>"
     time_now: "<shadow:#000000:1><red>Time Now: <yellow><time>"
     timezone: "<shadow:#000000:1><red>TimeZone: <yellow><zone>"
     entry: "<shadow:#000000:1><green><name>"
@@ -100,21 +98,21 @@ private:
     joined: "<prefix><green>Joined the private KOTH!"
     left: "<prefix><green>Left the private KOTH."
     cancelled: "<prefix><green>Your private KOTH has been cancelled."
-  lobby_open: "<prefix><green>Private KOTH lobby open! <yellow>/lobby <green>to join. Starting in <yellow><seconds>s."
+  lobby_open: "<prefix><green>Private KOTH lobby open! <yellow>/ekoth private join <green>to join. Starting in <yellow><seconds>s."
   started: "<prefix><green>Private KOTH started! Quick match: <duration>s, capture: <capture>s."
   objective_particles: "<shadow:#000000:1><gray>Follow the particles to the objective!"
 
 koth:
-  enter: "<prefix><green><entered> entered the <yellow><koth_name><green> koth! Cap in <captime>!"
-  leave: "<prefix><green><left> left the <yellow><koth_name><green> koth! <time_left> left!"
-  capping: "<prefix><green><capping> is capturing the <yellow><koth_name><green> koth! <time_left> left!"
-  capture: "<prefix><green><captured> captured the <yellow><koth_name><green> koth!"
+  enter: "<prefix><green><entered> entered the <yellow><koth_name><green> KOTH! Cap in <captime>!"
+  leave: "<prefix><green><left> left the <yellow><koth_name><green> KOTH! <time_left> left!"
+  capping: "<prefix><green><capping> is capturing the <yellow><koth_name><green> KOTH! <time_left> left!"
+  capture: "<prefix><green><captured> captured the <yellow><koth_name><green> KOTH!"
   begin: "<prefix><green><koth_name> has begun! Location: <yellow><location>"
-  ended: "<prefix><red>The koth <yellow><koth_name><red> has been forcefully ended!"
-  ended_first_capture: "<prefix><red>The koth <yellow><koth_name><red> has ended — first capture! Congratulations <player>!"
+  ended: "<prefix><red>The KOTH <yellow><koth_name><red> has been forcefully ended!"
+  ended_first_capture: "<prefix><red>The KOTH <yellow><koth_name><red> has ended — first capture! Congratulations <player>!"
   no_captures: "<prefix><red>No captures were made during that KOTH."
   warning_minutes: "<prefix><green><koth_name> <green>starts in <minutes> minutes!"
-  reminder: "<prefix><green>Reminder that the <yellow><koth_name><green> koth is still active! <capper> <dark_gray>(<time_left>)</dark_gray> is currently capturing."
+  reminder: "<prefix><green>Reminder that the <yellow><koth_name><green> KOTH is still active! <capper> <dark_gray>(<time_left>)</dark_gray> is currently capturing."
 
 protection:
   no_break: "<shadow:#000000:1><red>You cannot break blocks inside the active KOTH zone!"
@@ -123,9 +121,12 @@ protection:
 
 flare:
   not_in_region: "<prefix><red>You must be on the <yellow><koth> <red>capture point to use the flare!"
-  already_active: "<prefix><red>The <yellow><koth> <red>koth is already active."
-  started: "<prefix><green>Started the <yellow><koth> <green>koth with your flare."
-  started_broadcast: "<prefix><yellow><player> <green>started the <yellow><koth> <green>koth with a flare! Go to <yellow><location><green>!"
+  already_active: "<prefix><red>A KOTH is already active."
+  disabled: "<prefix><red>KOTH flares are disabled."
+  locked: "<prefix><red>Flares cannot start a KOTH while manual starts are locked."
+  failed: "<prefix><red>The flare was not consumed because the KOTH could not start."
+  started: "<prefix><green>Started the <yellow><koth> <green>KOTH with your flare."
+  started_broadcast: "<prefix><yellow><player> <green>started the <yellow><koth> <green>KOTH with a flare! Go to <yellow><location><green>!"
 
 bossbar:
   format_with_capper: "<shadow:#000000:1><gold><bold><koth_name> <dark_gray>|<green><capper><contested> <dark_gray>|<gray><time>"

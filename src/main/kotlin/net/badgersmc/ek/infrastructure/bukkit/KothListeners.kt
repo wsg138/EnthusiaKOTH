@@ -1,14 +1,11 @@
 package net.badgersmc.ek.infrastructure.bukkit
 
-import net.badgersmc.ek.application.FlareService
 import net.badgersmc.ek.application.FireworkCelebrationService
+import net.badgersmc.ek.application.FlareService
 import net.badgersmc.ek.application.KothService
 import net.badgersmc.ek.config.EnthusiaKothConfig
 import net.badgersmc.ek.domain.KothArena
-import net.badgersmc.ek.toComponent
-import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer
 import org.bukkit.Material
-import org.bukkit.entity.EntityType
 import org.bukkit.entity.Firework
 import org.bukkit.event.EventHandler
 import org.bukkit.event.Listener
@@ -27,38 +24,29 @@ class KothListeners(
     private val command: KothCommand,
     private val lang: net.badgersmc.nexus.i18n.LangService,
 ) : Listener {
-
     @EventHandler
     fun onFlareUse(event: PlayerInteractEvent) {
         if (event.action != Action.RIGHT_CLICK_BLOCK && event.action != Action.RIGHT_CLICK_AIR) return
         val item = event.item ?: return
         if (item.type == Material.AIR) return
-
-        val handled = flareService.handleFlareUse(event.player, item, event.hand == org.bukkit.inventory.EquipmentSlot.OFF_HAND)
-        if (handled) event.isCancelled = true
+        if (flareService.handleFlareUse(event.player, item, event.hand == org.bukkit.inventory.EquipmentSlot.OFF_HAND)) {
+            event.isCancelled = true
+        }
     }
 
     @EventHandler
     fun onGuiClick(event: InventoryClickEvent) {
-        val title = PlainTextComponentSerializer.plainText().serialize(event.view.title())
-        if (title.contains("KOTHs")) {
-            event.isCancelled = true
-            // Only handle clicks in the GUI itself — clicks in the player's own
-            // inventory (bottom) have slots relative to that inventory and must
-            // never be treated as GUI slot indexes.
-            if (event.clickedInventory == event.view.topInventory
-                && event.whoClicked is org.bukkit.entity.Player
-                && event.slot >= 0
-            ) {
-                command.handleGuiClick(event.whoClicked as org.bukkit.entity.Player, event.slot)
-            }
+        val holder = event.view.topInventory.holder as? KothGuiHolder ?: return
+        event.isCancelled = true
+        if (event.clickedInventory == event.view.topInventory && event.whoClicked is org.bukkit.entity.Player && event.slot >= 0) {
+            command.handleGuiClick(event.whoClicked as org.bukkit.entity.Player, event.slot, holder)
         }
     }
 
     @EventHandler
     fun onBlockBreak(event: BlockBreakEvent) {
-        val ev = kothService.activeEvent ?: return
-        if (ev.arena.zone.contains(event.block.location) && !event.player.hasPermission("enthusiakoth.admin")) {
+        val active = kothService.activeEvent ?: return
+        if (active.arena.zone.contains(event.block.location) && !event.player.hasPermission("enthusiakoth.admin")) {
             event.isCancelled = true
             event.player.sendMessage(lang.msg("protection.no_break"))
         }
@@ -66,8 +54,8 @@ class KothListeners(
 
     @EventHandler
     fun onBlockPlace(event: BlockPlaceEvent) {
-        val ev = kothService.activeEvent ?: return
-        if (ev.arena.zone.contains(event.block.location) && !event.player.hasPermission("enthusiakoth.admin")) {
+        val active = kothService.activeEvent ?: return
+        if (active.arena.zone.contains(event.block.location) && !event.player.hasPermission("enthusiakoth.admin")) {
             event.isCancelled = true
             event.player.sendMessage(lang.msg("protection.no_place"))
         }

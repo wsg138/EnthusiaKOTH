@@ -1,21 +1,11 @@
 package net.badgersmc.ek.config
 
-import net.badgersmc.ek.domain.CaptureLeaveBehavior
 import net.badgersmc.ek.domain.LockState
-import net.badgersmc.ek.domain.TeamMode
-import net.badgersmc.ek.infrastructure.restriction.MaceRule
 import net.badgersmc.ek.infrastructure.restriction.RuleSet
-import net.badgersmc.nexus.config.ConfigLoader
-import org.bukkit.Location
-import org.bukkit.plugin.java.JavaPlugin
 import java.time.ZoneId
 
-/**
- * Top-level YAML config for EnthusiaKOTH.
- * Mirror of FactionsKore's koth.yml with Enthusia's multi-family system.
- */
 data class EnthusiaKothConfig(
-    val timezone: java.time.ZoneId = java.time.ZoneId.of("America/New_York"),
+    val timezone: ZoneId = ZoneId.of("America/New_York"),
     val manualStart: ManualStartConfig = ManualStartConfig(),
     val schedule: ScheduleConfig = ScheduleConfig(),
     val flares: FlareConfig = FlareConfig(),
@@ -35,6 +25,7 @@ data class ManualStartConfig(
     val enabled: Boolean = true,
     val basicCost: Double = 0.0,
     val advancedCost: Double = 0.0,
+    val delaySeconds: Int = 0,
 )
 
 data class ScheduleConfig(
@@ -132,13 +123,9 @@ data class DiscordConfig(
     val liveUpdateSeconds: Int = 60,
 )
 
-data class DisplayConfig(
-    val zoneBorder: Boolean = true,
-)
+data class DisplayConfig(val zoneBorder: Boolean = true)
 
-data class FamilyRulesConfig(
-    val rules: Map<String, RuleSet> = emptyMap(),
-)
+data class FamilyRulesConfig(val rules: Map<String, RuleSet> = emptyMap())
 
 data class PrivateTestingConfig(
     val lobbySeconds: Int = 0,
@@ -147,6 +134,4 @@ data class PrivateTestingConfig(
     val showObjectiveParticles: Boolean = true,
 )
 
-data class LockConfig(
-    val state: LockState = LockState.UNLOCKED,
-)
+data class LockConfig(val state: LockState = LockState.UNLOCKED)

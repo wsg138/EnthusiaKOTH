@@ -29,8 +29,27 @@ permissions:
     description: Administrative KOTH commands
     children:
       enthusiakoth.command: true
+      enthusiakoth.start.advanced: true
+      enthusiakoth.flare.use: true
+      enthusiakoth.privatetest: true
   enthusiakoth.player:
     default: true
     description: Player KOTH commands
     children:
       enthusiakoth.command: true
+      enthusiakoth.start.basic: true
+      enthusiakoth.flare.use: true
+  enthusiakoth.start.basic:
+    default: true
+    description: Start a player-paid KOTH at the basic configured cost
+  enthusiakoth.start.advanced:
+    default: op
+    description: Start a player-paid KOTH at the advanced configured cost
+    children:
+      enthusiakoth.start.basic: true
+  enthusiakoth.flare.use:
+    default: true
+    description: Use KOTH flare items
+  enthusiakoth.privatetest:
+    default: op
+    description: Start or cancel private KOTH tests

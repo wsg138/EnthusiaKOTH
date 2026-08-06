@@ -16,40 +16,27 @@ repositories {
 dependencies {
     compileOnly("io.papermc.paper:paper-api:1.21.11-R0.1-SNAPSHOT")
 
-    // Nexus — core + i18n + loader
     implementation("com.github.BadgersMC.Nexus:nexus-core:v2.1.1")
     implementation("com.github.BadgersMC.Nexus:nexus-i18n:v2.1.1")
     implementation("com.github.BadgersMC.Nexus:nexus-paper-loader:v2.1.1")
 
-    // LumaGuilds API (provided by server, join-classpath)
-    // Path can be overridden via -Plumaguilds.jar=... or LUMAGUILDS_JAR env var.
-    // Without an explicit jar (e.g. CI), resolve the tag-pinned API from JitPack.
-    val lumaguildsJar = System.getenv("LUMAGUILDS_JAR")
-        ?: project.findProperty("lumaguilds.jar")?.toString()
-        ?: findProperty("defaultLumaguildsJar")?.toString()
-    if (lumaguildsJar != null) {
-        if (!File(lumaguildsJar).exists()) {
-            error("LumaGuilds API jar not found at: $lumaguildsJar")
-        }
-        compileOnly(files(lumaguildsJar))
-    } else {
-        compileOnly("com.github.BadgersMC:LumaGuilds:v2.1.0")
+    // LumaGuilds is provided by Paper join-classpath. A checked-in compile shim
+    // mirrors only its public ServicesManager API and is excluded from shadowJar.
+    compileOnly("com.github.MilkBowl:VaultAPI:1.7.1") {
+        exclude(group = "org.bukkit", module = "bukkit")
     }
-
-    // PlaceholderAPI (provided by server)
     compileOnly("me.clip:placeholderapi:2.11.6")
 
-    // Runtime deps — shaded into the jar (Leaf blocks Maven Central at startup)
     implementation("com.zaxxer:HikariCP:5.1.0")
     implementation("org.xerial:sqlite-jdbc:3.45.1.0")
     implementation("org.slf4j:slf4j-nop:2.0.13")
 
-    // Testing
     testImplementation("org.junit.jupiter:junit-jupiter:5.11.4")
     testImplementation("io.mockk:mockk:1.13.13")
-    // Paper API on the TEST runtime classpath — unit tests load classes that
-    // reference Bukkit types even when the code under test never calls them.
     testImplementation("io.papermc.paper:paper-api:1.21.11-R0.1-SNAPSHOT")
+    testImplementation("com.github.MilkBowl:VaultAPI:1.7.1") {
+        exclude(group = "org.bukkit", module = "bukkit")
+    }
 }
 
 kotlin {
@@ -69,7 +56,7 @@ tasks.jar {
 tasks.shadowJar {
     archiveBaseName.set("EnthusiaKOTH")
     mergeServiceFiles()
-    // No excludes — shade everything (Leaf blocks all runtime Maven resolution)
+    exclude("net/lumalyte/lg/api/**")
 }
 
 tasks.build {
