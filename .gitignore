@@ -13,3 +13,6 @@ build/
 .idea/
 *.iml
 .vscode/
+
+# SPEAR state
+.claude/
