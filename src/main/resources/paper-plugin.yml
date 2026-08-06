@@ -23,22 +23,23 @@ dependencies:
 permissions:
   enthusiakoth.command:
     default: true
-    description: Use /ekoth
+    description: Use the /ekoth command
+  enthusiakoth.player:
+    default: true
+    description: Standard player KOTH permissions
+    children:
+      enthusiakoth.command: true
+      enthusiakoth.start.basic: true
+      enthusiakoth.flare.use: true
   enthusiakoth.admin:
     default: op
-    description: Administrative KOTH commands
+    description: Administrative KOTH commands and maintenance
     children:
       enthusiakoth.command: true
       enthusiakoth.start.advanced: true
       enthusiakoth.flare.use: true
       enthusiakoth.privatetest: true
-  enthusiakoth.player:
-    default: true
-    description: Player KOTH commands
-    children:
-      enthusiakoth.command: true
-      enthusiakoth.start.basic: true
-      enthusiakoth.flare.use: true
+      enthusiakoth.protection.bypass: true
   enthusiakoth.start.basic:
     default: true
     description: Start a player-paid KOTH at the basic configured cost
@@ -52,4 +53,7 @@ permissions:
     description: Use KOTH flare items
   enthusiakoth.privatetest:
     default: op
-    description: Start or cancel private KOTH tests
+    description: Start or cancel approved private KOTH tests
+  enthusiakoth.protection.bypass:
+    default: op
+    description: Perform intentional player maintenance inside protected KOTH regions

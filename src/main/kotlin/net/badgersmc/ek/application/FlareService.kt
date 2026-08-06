@@ -45,30 +45,33 @@ class FlareService(
             player.sendMessage(lang.msg("flare.not_in_region", "koth" to arenaId))
             return true
         }
-        val actor = StartActor(
-            playerId = player.uniqueId,
-            isAdmin = player.hasPermission("enthusiakoth.admin"),
-            canStartBasic = player.hasPermission("enthusiakoth.start.basic"),
-            canStartAdvanced = player.hasPermission("enthusiakoth.start.advanced"),
-            canUseFlare = player.hasPermission("enthusiakoth.flare.use"),
+        val result = startService.start(
+            StartRequest(
+                actor = StartActor(
+                    playerId = player.uniqueId,
+                    isAdmin = player.hasPermission("enthusiakoth.admin"),
+                    canStartBasic = player.hasPermission("enthusiakoth.start.basic"),
+                    canStartAdvanced = player.hasPermission("enthusiakoth.start.advanced"),
+                    canUseFlare = player.hasPermission("enthusiakoth.flare.use"),
+                ),
+                arena = arena,
+                source = StartSource.FLARE,
+            ),
         )
-        val result = startService.start(StartRequest(actor, arena, StartSource.FLARE))
-        if (result !is StartResult.Started) {
-            val key = when ((result as StartResult.Rejected).failure) {
-                StartFailure.FEATURE_DISABLED -> "flare.disabled"
-                StartFailure.LOCKED -> "flare.locked"
-                StartFailure.ALREADY_ACTIVE -> "flare.already_active"
-                StartFailure.NO_PERMISSION -> "command.error.no_permission"
-                else -> "flare.failed"
-            }
-            player.sendMessage(lang.msg(key, "koth" to arenaId))
+        if (result is StartResult.Rejected) {
+            player.sendMessage(lang.msg(FlareUsePolicy.rejectionKey(result), "koth" to arenaId))
             return true
         }
 
-        item.amount -= 1
-        if (item.amount <= 0) {
-            if (offHand) player.inventory.setItemInOffHand(null) else player.inventory.setItemInMainHand(null)
+        val hand = if (offHand) FlareHand.OFF else FlareHand.MAIN
+        val consumption = FlareUsePolicy.consumption(item.amount, hand)
+        item.amount = consumption.newAmount
+        when (consumption.clearHand) {
+            FlareHand.MAIN -> player.inventory.setItemInMainHand(null)
+            FlareHand.OFF -> player.inventory.setItemInOffHand(null)
+            null -> Unit
         }
+
         player.sendMessage(lang.msg("flare.started", "koth" to arenaId))
         val location = arena.zone.center(player.world)
         Bukkit.broadcast(
