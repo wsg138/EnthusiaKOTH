@@ -12,9 +12,11 @@ import net.badgersmc.ek.application.StartService
 import net.badgersmc.ek.application.StartSource
 import net.badgersmc.ek.application.StartTier
 import net.badgersmc.ek.config.EnthusiaKothConfig
-import net.badgersmc.ek.domain.EventState
 import net.badgersmc.ek.domain.KothArena
 import net.badgersmc.ek.domain.LockState
+import net.badgersmc.ek.domain.PrivateJoinResult
+import net.badgersmc.ek.domain.PrivateTestAccess
+import net.badgersmc.ek.domain.TeamMode
 import net.badgersmc.ek.infrastructure.lumaguilds.LumaGuildsAdapter
 import net.badgersmc.ek.infrastructure.persistence.SqlStatsRepository
 import net.badgersmc.nexus.i18n.LangService
@@ -33,7 +35,11 @@ import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.util.UUID
 
-class KothGuiHolder(val arenaIds: List<String>) : InventoryHolder {
+class KothGuiHolder(
+    val arenaIds: List<String>,
+    val modeSlot: Int,
+    var teamMode: TeamMode = TeamMode.SOLO,
+) : InventoryHolder {
     lateinit var backingInventory: Inventory
     override fun getInventory(): Inventory = backingInventory
 }
@@ -63,11 +69,11 @@ class KothCommand(
             "schedule" -> schedule(sender)
             "top" -> top(sender, args.getOrNull(1)?.toIntOrNull() ?: 1)
             "stats" -> stats(sender, args.getOrNull(1))
-            "start" -> start(sender, args.getOrNull(1) ?: "", args.getOrNull(2))
+            "start" -> start(sender, args.getOrNull(1) ?: "", args.drop(2))
             "stop", "cancel" -> stop(sender)
             "giveflare" -> giveFlare(sender, args.getOrNull(1) ?: "", args.getOrNull(2) ?: "", args.getOrNull(3)?.toIntOrNull() ?: 1)
             "reload" -> doReload(sender)
-            "private" -> privateTest(sender, args.getOrNull(1) ?: "", args.getOrNull(2) ?: "")
+            "private", "test" -> privateTest(sender, args)
             "status" -> status(sender)
             "lock" -> lock(sender, args.getOrNull(1) ?: "")
             else -> sendHelp(sender)
@@ -81,23 +87,36 @@ class KothCommand(
             if (sender.hasPermission("enthusiakoth.start.basic") || sender.hasPermission("enthusiakoth.start.advanced") || sender.hasPermission("enthusiakoth.admin")) {
                 options += "start"
             }
+            if (canStartPrivate(sender) || canJoinPrivate(sender)) options += "test"
             if (sender.hasPermission("enthusiakoth.admin")) {
                 options += listOf("stop", "cancel", "giveflare", "reload", "status", "lock")
             }
-            return options.filter { it.startsWith(args[0], ignoreCase = true) }.toMutableList()
+            return options.distinct().filter { it.startsWith(args[0], ignoreCase = true) }.toMutableList()
         }
         if (args.size == 2) {
             when (args[0].lowercase()) {
                 "start" -> return arenas().keys.filter { it.startsWith(args[1], true) }.toMutableList()
-                "private" -> return listOf("start", "join", "leave", "cancel").filter { it.startsWith(args[1], true) }.toMutableList()
+                "private", "test" -> return listOf("start", "join", "leave", "cancel").filter { it.startsWith(args[1], true) }.toMutableList()
                 "lock" -> return LockState.entries.map { it.name.lowercase() }.filter { it.startsWith(args[1], true) }.toMutableList()
             }
         }
         if (args.size == 3 && args[0].equals("start", true)) {
-            return listOf("basic", "advanced").filter { it.startsWith(args[2], true) }.toMutableList()
+            return listOf("solo", "guild", "basic", "advanced").filter { it.startsWith(args[2], true) }.toMutableList()
         }
-        if (args.size == 3 && args[0].equals("private", true) && args[1].equals("start", true)) {
-            return arenas().keys.filter { it.startsWith(args[2], true) }.toMutableList()
+        if (args.size == 4 && args[0].equals("start", true)) {
+            val first = args[2].lowercase()
+            val options = if (first in setOf("basic", "advanced")) listOf("solo", "guild") else listOf("basic", "advanced")
+            return options.filter { it.startsWith(args[3], true) }.toMutableList()
+        }
+        if (args.size >= 3 && (args[0].equals("private", true) || args[0].equals("test", true)) && args[1].equals("start", true)) {
+            val options = when (args.size) {
+                3 -> arenas().keys.toList()
+                4 -> listOf("solo", "guild")
+                5 -> listOf("self", "staff")
+                6 -> listOf("quick", "production")
+                else -> emptyList()
+            }
+            return options.filter { it.startsWith(args.last(), true) }.toMutableList()
         }
         return mutableListOf()
     }
@@ -108,6 +127,7 @@ class KothCommand(
         if (sender.hasPermission("enthusiakoth.start.basic") || sender.hasPermission("enthusiakoth.start.advanced") || sender.hasPermission("enthusiakoth.admin")) {
             sender.sendMessage(lang.msg("command.help.start"))
         }
+        if (canStartPrivate(sender) || canJoinPrivate(sender)) sender.sendMessage(lang.msg("command.help.private_usage"))
         if (sender.hasPermission("enthusiakoth.admin")) {
             listOf("stop", "cancel", "giveflare", "reload", "status", "lock").forEach {
                 sender.sendMessage(lang.msg("command.help.$it"))
@@ -120,16 +140,20 @@ class KothCommand(
             sender.sendMessage(lang.msg("command.error.not_a_player"))
             return
         }
-        val arenaIds = arenas().keys.toList()
-        val size = ((arenaIds.size + 8) / 9).coerceIn(1, 6) * 9
-        val holder = KothGuiHolder(arenaIds)
+        val allArenaIds = arenas().keys.toList()
+        val size = ((allArenaIds.size + 1 + 8) / 9).coerceIn(1, 6) * 9
+        val modeSlot = size - 1
+        val arenaIds = allArenaIds.take(modeSlot)
+        val holder = KothGuiHolder(arenaIds, modeSlot)
         val inventory = Bukkit.createInventory(holder, size, lang.msg("command.gui.title"))
         holder.backingInventory = inventory
-        arenaIds.take(size).forEachIndexed { slot, id ->
-            val event = kothService.activeEvent
-            val active = event?.arena?.id == id
-            val capper = if (active) kothService.capperName(event!!) ?: "None" else "None"
-            val time = if (active) formatTime(event!!.endsAt.epochSecond - System.currentTimeMillis() / 1000) else "Scheduled"
+        arenaIds.forEachIndexed { slot, id ->
+            val activeEvent = kothService.activeEvent?.takeIf { it.arena.id == id }
+            val active = activeEvent != null
+            val capper = activeEvent?.let(kothService::capperName) ?: "None"
+            val time = activeEvent
+                ?.let { formatTime(it.endsAt.epochSecond - System.currentTimeMillis() / 1000) }
+                ?: "Scheduled"
             val item = ItemStack(if (active) Material.GLOWSTONE_DUST else Material.REDSTONE_TORCH)
             item.itemMeta = item.itemMeta?.apply {
                 displayName(lang.msg(if (active) "command.gui.item_name_active" else "command.gui.item_name_inactive", "id" to id.uppercase()))
@@ -143,7 +167,15 @@ class KothCommand(
             }
             inventory.setItem(slot, item)
         }
+        inventory.setItem(modeSlot, teamModeItem(holder.teamMode))
         sender.openInventory(inventory)
+    }
+
+    private fun teamModeItem(mode: TeamMode): ItemStack = ItemStack(Material.PLAYER_HEAD).apply {
+        itemMeta = itemMeta?.apply {
+            displayName(lang.msg("command.gui.mode_name", "mode" to mode.name.lowercase()))
+            lore(listOf(lang.msg("command.gui.mode_lore")))
+        }
     }
 
     private fun schedule(sender: CommandSender) {
@@ -157,9 +189,12 @@ class KothCommand(
         sender.sendMessage(lang.msg("command.schedule.time_now", "time" to now.format(DateTimeFormatter.ofPattern("HH:mm"))))
         sender.sendMessage(lang.msg("command.schedule.timezone", "zone" to cfg.schedule.zone.id))
         sender.sendMessage(Component.empty())
-        arenas().forEach { (id, arena) ->
-            sender.sendMessage(lang.msg("command.schedule.entry", "name" to id))
-            arena.schedule.ifEmpty { cfg.schedule.times }.forEach { time ->
+        val resolved = scheduleService.occurrencesForDate(now.toLocalDate())
+        val grouped = resolved.groupBy { it.arenaId }
+        grouped.forEach { (arenaId, occurrences) ->
+            sender.sendMessage(lang.msg("command.schedule.entry", "name" to arenaId))
+            occurrences.forEach { occurrence ->
+                val time = occurrence.instant.atZone(cfg.schedule.zone).format(DateTimeFormatter.ofPattern("HH:mm"))
                 sender.sendMessage(lang.msg("command.schedule.entry_time", "time" to time))
             }
         }
@@ -195,27 +230,61 @@ class KothCommand(
         )
     }
 
-    private fun start(sender: CommandSender, arenaId: String, tierArg: String?) {
+    private data class ParsedStartOptions(val tier: StartTier?, val teamMode: TeamMode)
+
+    private fun start(sender: CommandSender, arenaId: String, optionArgs: List<String>) {
         val arena = arenas()[arenaId]
         if (arena == null) {
             sender.sendMessage(lang.msg("command.error.koth_not_found", "koths" to arenas().keys.joinToString(", ")))
             return
         }
-        val tier = when (tierArg?.lowercase()) {
-            null, "" -> null
-            "basic" -> StartTier.BASIC
-            "advanced" -> StartTier.ADVANCED
-            else -> {
-                sender.sendMessage(lang.msg("command.error.invalid_start_tier"))
-                return
-            }
-        }
+        val options = parseStartOptions(sender, optionArgs) ?: return
         val source = when {
             sender !is Player -> StartSource.CONSOLE
             sender.hasPermission("enthusiakoth.admin") -> StartSource.ADMIN_COMMAND
             else -> StartSource.PLAYER_COMMAND
         }
-        sendStartResult(sender, arenaId, startService.start(StartRequest(startActor(sender), arena, source, tier)), false)
+        sendStartResult(
+            sender,
+            arenaId,
+            startService.start(
+                StartRequest(
+                    actor = startActor(sender),
+                    arena = arena,
+                    source = source,
+                    tier = options.tier,
+                    teamMode = options.teamMode,
+                ),
+            ),
+            false,
+        )
+    }
+
+    private fun parseStartOptions(sender: CommandSender, optionArgs: List<String>): ParsedStartOptions? {
+        var tier: StartTier? = null
+        var teamMode = TeamMode.SOLO
+        var modeSpecified = false
+        for (raw in optionArgs.filter { it.isNotBlank() }) {
+            when (raw.lowercase()) {
+                "basic" -> if (tier == null) tier = StartTier.BASIC else return invalidStartOptions(sender)
+                "advanced" -> if (tier == null) tier = StartTier.ADVANCED else return invalidStartOptions(sender)
+                "solo" -> if (!modeSpecified) {
+                    teamMode = TeamMode.SOLO
+                    modeSpecified = true
+                } else return invalidStartOptions(sender)
+                "guild" -> if (!modeSpecified) {
+                    teamMode = TeamMode.GUILD
+                    modeSpecified = true
+                } else return invalidStartOptions(sender)
+                else -> return invalidStartOptions(sender)
+            }
+        }
+        return ParsedStartOptions(tier, teamMode)
+    }
+
+    private fun invalidStartOptions(sender: CommandSender): ParsedStartOptions? {
+        sender.sendMessage(lang.msg("command.error.invalid_start_options"))
+        return null
     }
 
     private fun startActor(sender: CommandSender) = StartActor(
@@ -254,8 +323,13 @@ class KothCommand(
             sender.sendMessage(lang.msg("command.error.no_permission"))
             return
         }
-        if (!kothService.forceEnd()) sender.sendMessage(lang.msg("command.error.no_active"))
-        else sender.sendMessage(lang.msg("command.success.ended"))
+        if (!kothService.forceEnd()) {
+            sender.sendMessage(lang.msg("command.error.no_active"))
+        } else if (kothService.lastCancellationRefundPending) {
+            sender.sendMessage(lang.msg("command.error.refund_failed"))
+        } else {
+            sender.sendMessage(lang.msg("command.success.ended"))
+        }
     }
 
     private fun giveFlare(sender: CommandSender, playerName: String, arenaId: String, amount: Int) {
@@ -283,6 +357,9 @@ class KothCommand(
             return
         }
         reloadAction()
+        if (kothService.lastCancellationRefundPending) {
+            sender.sendMessage(lang.msg("command.error.refund_failed"))
+        }
         sender.sendMessage(lang.msg("command.error.reloaded"))
     }
 
@@ -327,26 +404,63 @@ class KothCommand(
         sender.sendMessage(lang.msg("command.error.lock_set", "state" to state.name.lowercase()))
     }
 
-    private fun privateTest(sender: CommandSender, sub: String, arenaId: String) {
+    private fun privateTest(sender: CommandSender, args: Array<out String>) {
         if (sender !is Player) {
             sender.sendMessage(lang.msg("command.error.not_a_player"))
             return
         }
-        when (sub.lowercase()) {
-            "start" -> if (sender.hasPermission("enthusiakoth.privatetest")) privateStart(sender, arenaId) else sender.sendMessage(lang.msg("command.error.no_permission"))
-            "cancel" -> if (sender.hasPermission("enthusiakoth.privatetest")) privateCancel(sender) else sender.sendMessage(lang.msg("command.error.no_permission"))
-            "join" -> privateJoin(sender)
+        when (args.getOrNull(1)?.lowercase()) {
+            "start" -> if (canStartPrivate(sender)) privateStart(sender, args) else sender.sendMessage(lang.msg("command.error.no_permission"))
+            "cancel" -> if (canStartPrivate(sender)) privateCancel(sender) else sender.sendMessage(lang.msg("command.error.no_permission"))
+            "join" -> if (canJoinPrivate(sender)) privateJoin(sender) else sender.sendMessage(lang.msg("command.error.no_permission"))
             "leave" -> privateLeave(sender)
             else -> sender.sendMessage(lang.msg("private.usage"))
         }
     }
 
-    private fun privateStart(player: Player, arenaId: String) {
-        val arena = arenas()[arenaId] ?: run {
+    private fun canStartPrivate(sender: CommandSender): Boolean =
+        sender.hasPermission("enthusiakoth.admin") ||
+            sender.hasPermission("enthusiakoth.test.start") ||
+            sender.hasPermission("enthusiakoth.privatetest")
+
+    private fun canJoinPrivate(sender: CommandSender): Boolean =
+        sender.hasPermission("enthusiakoth.admin") || sender.hasPermission("enthusiakoth.test.join")
+
+    private fun privateStart(player: Player, args: Array<out String>) {
+        val arenaId = args.getOrNull(2)
+        val teamMode = when (args.getOrNull(3)?.lowercase()) {
+            "solo" -> TeamMode.SOLO
+            "guild" -> TeamMode.GUILD
+            else -> {
+                player.sendMessage(lang.msg("private.usage"))
+                return
+            }
+        }
+        val access = when (args.getOrNull(4)?.lowercase()) {
+            "self" -> PrivateTestAccess.OWNER_ONLY
+            "staff" -> PrivateTestAccess.PERMISSION_JOIN
+            else -> {
+                player.sendMessage(lang.msg("private.usage"))
+                return
+            }
+        }
+        val quickTiming = when (args.getOrNull(5)?.lowercase()) {
+            null, "quick" -> true
+            "production" -> false
+            else -> {
+                player.sendMessage(lang.msg("private.error.invalid_timing"))
+                return
+            }
+        }
+        val arena = arenaId?.let { arenas()[it] } ?: run {
             player.sendMessage(lang.msg("private.error.arena_not_found", "koths" to arenas().keys.joinToString(", ")))
             return
         }
-        if (!kothService.startPrivateTest(arena, player.uniqueId, cfgLoader())) {
+        if (!KothService.supportsPrivateTesting(arena)) {
+            player.sendMessage(lang.msg("private.error.conquest_unsupported"))
+            return
+        }
+        if (!kothService.startPrivateTest(arena, player.uniqueId, cfgLoader(), teamMode, access, quickTiming)) {
             player.sendMessage(lang.msg(if (kothService.activeEvent != null) "private.error.already_active" else "private.error.locked"))
         }
     }
@@ -356,24 +470,14 @@ class KothCommand(
             player.sendMessage(lang.msg("private.error.no_active"))
             return
         }
-        if (!event.isPrivateTest) {
-            player.sendMessage(lang.msg("private.error.not_private"))
-            return
+        when (event.joinPrivate(player.uniqueId)) {
+            PrivateJoinResult.JOINED -> player.sendMessage(lang.msg("private.success.joined"))
+            PrivateJoinResult.NOT_PRIVATE -> player.sendMessage(lang.msg("private.error.not_private"))
+            PrivateJoinResult.EXPIRED -> player.sendMessage(lang.msg("private.error.expired"))
+            PrivateJoinResult.OWNER -> player.sendMessage(lang.msg("private.error.is_owner"))
+            PrivateJoinResult.OWNER_ONLY -> player.sendMessage(lang.msg("private.error.owner_only"))
+            PrivateJoinResult.ALREADY_JOINED -> player.sendMessage(lang.msg("private.error.already_joined"))
         }
-        if (event.state !in setOf(EventState.STARTING, EventState.ACTIVE)) {
-            player.sendMessage(lang.msg("private.error.expired"))
-            return
-        }
-        if (event.isOwner(player.uniqueId)) {
-            player.sendMessage(lang.msg("private.error.is_owner"))
-            return
-        }
-        if (!event.join(player.uniqueId)) {
-            player.sendMessage(lang.msg("private.error.already_joined"))
-            return
-        }
-        player.sendMessage(lang.msg("private.success.joined"))
-        if (cfgLoader().privateTesting.showObjectiveParticles) player.sendMessage(lang.msg("private.objective_particles"))
     }
 
     private fun privateLeave(player: Player) {
@@ -405,9 +509,22 @@ class KothCommand(
     }
 
     fun handleGuiClick(player: Player, slot: Int, holder: KothGuiHolder) {
+        if (slot == holder.modeSlot) {
+            holder.teamMode = if (holder.teamMode == TeamMode.SOLO) TeamMode.GUILD else TeamMode.SOLO
+            holder.backingInventory.setItem(holder.modeSlot, teamModeItem(holder.teamMode))
+            return
+        }
         val arenaId = holder.arenaIds.getOrNull(slot) ?: return
         val arena = arenas()[arenaId] ?: return
-        val result = startService.start(StartRequest(startActor(player), arena, StartSource.GUI, StartTier.BASIC))
+        val result = startService.start(
+            StartRequest(
+                actor = startActor(player),
+                arena = arena,
+                source = StartSource.GUI,
+                tier = StartTier.BASIC,
+                teamMode = holder.teamMode,
+            ),
+        )
         if (result is StartResult.Started) player.closeInventory()
         sendStartResult(player, arenaId, result, true)
     }

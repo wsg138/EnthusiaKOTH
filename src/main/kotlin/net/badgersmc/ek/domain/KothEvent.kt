@@ -5,6 +5,17 @@ import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
+enum class PrivateTestAccess { OWNER_ONLY, PERMISSION_JOIN }
+
+enum class PrivateJoinResult {
+    JOINED,
+    NOT_PRIVATE,
+    EXPIRED,
+    OWNER,
+    OWNER_ONLY,
+    ALREADY_JOINED,
+}
+
 data class KothEvent(
     val id: UUID,
     val arena: KothArena,
@@ -15,6 +26,8 @@ data class KothEvent(
     val isPrivateTest: Boolean = false,
     val lobbySeconds: Int = 0,
     val paymentReceipt: PaymentReceipt? = null,
+    val teamMode: TeamMode = TeamMode.SOLO,
+    val privateTestAccess: PrivateTestAccess? = null,
 ) {
     val scores: MutableMap<TeamId, Double> = ConcurrentHashMap()
     val participants: MutableSet<UUID> = ConcurrentHashMap.newKeySet()
@@ -28,6 +41,20 @@ data class KothEvent(
     fun join(playerId: UUID): Boolean = participants.add(playerId)
     fun leave(playerId: UUID): Boolean = participants.remove(playerId)
     fun isOwner(playerId: UUID): Boolean = owner == playerId
+
+    fun joinPrivate(playerId: UUID): PrivateJoinResult {
+        if (!isPrivateTest) return PrivateJoinResult.NOT_PRIVATE
+        if (state !in setOf(EventState.STARTING, EventState.ACTIVE)) return PrivateJoinResult.EXPIRED
+        if (isOwner(playerId)) return PrivateJoinResult.OWNER
+        if (privateTestAccess != PrivateTestAccess.PERMISSION_JOIN) return PrivateJoinResult.OWNER_ONLY
+        return if (join(playerId)) PrivateJoinResult.JOINED else PrivateJoinResult.ALREADY_JOINED
+    }
+
+    fun resolveTeam(playerId: UUID, guildId: UUID?): TeamId? {
+        if (teamMode == TeamMode.SOLO || arena.ignoreFactions) return TeamId(TeamMode.SOLO, playerId)
+        return guildId?.let { TeamId(TeamMode.GUILD, it) }
+    }
+
     fun clearScores() { scores.clear() }
     fun addScore(team: TeamId, amount: Double) { scores.merge(team, amount, Double::plus) }
     fun setScore(team: TeamId, score: Double) { scores[team] = score }

@@ -22,6 +22,7 @@ class DisplayService(
         capper: String?,
         timeLeft: String,
         contested: Boolean,
+        progress: Float,
         audience: Collection<Player>,
         isPublic: Boolean,
     ) {
@@ -36,10 +37,12 @@ class DisplayService(
         } else {
             lang.msg("bossbar.format_no_capper", "koth_name" to kothName, "time" to timeLeft)
         }
-        val bar = bossBar ?: BossBar.bossBar(text, 1.0f, BossBar.Color.RED, BossBar.Overlay.PROGRESS).also {
+        val safeProgress = progress.coerceIn(0.0f, 1.0f)
+        val bar = bossBar ?: BossBar.bossBar(text, safeProgress, BossBar.Color.RED, BossBar.Overlay.PROGRESS).also {
             bossBar = it
         }
         bar.name(text)
+        bar.progress(safeProgress)
         val desired = audience.mapTo(mutableSetOf()) { it.uniqueId }
         Bukkit.getOnlinePlayers().forEach { player ->
             if (player.uniqueId in desired) bar.addViewer(player) else bar.removeViewer(player)

@@ -10,8 +10,6 @@ import org.bukkit.entity.Firework
 import org.bukkit.event.EventHandler
 import org.bukkit.event.Listener
 import org.bukkit.event.block.Action
-import org.bukkit.event.block.BlockBreakEvent
-import org.bukkit.event.block.BlockPlaceEvent
 import org.bukkit.event.entity.EntityDamageByEntityEvent
 import org.bukkit.event.inventory.InventoryClickEvent
 import org.bukkit.event.player.PlayerInteractEvent
@@ -40,24 +38,6 @@ class KothListeners(
         event.isCancelled = true
         if (event.clickedInventory == event.view.topInventory && event.whoClicked is org.bukkit.entity.Player && event.slot >= 0) {
             command.handleGuiClick(event.whoClicked as org.bukkit.entity.Player, event.slot, holder)
-        }
-    }
-
-    @EventHandler
-    fun onBlockBreak(event: BlockBreakEvent) {
-        val active = kothService.activeEvent ?: return
-        if (active.arena.zone.contains(event.block.location) && !event.player.hasPermission("enthusiakoth.admin")) {
-            event.isCancelled = true
-            event.player.sendMessage(lang.msg("protection.no_break"))
-        }
-    }
-
-    @EventHandler
-    fun onBlockPlace(event: BlockPlaceEvent) {
-        val active = kothService.activeEvent ?: return
-        if (active.arena.zone.contains(event.block.location) && !event.player.hasPermission("enthusiakoth.admin")) {
-            event.isCancelled = true
-            event.player.sendMessage(lang.msg("protection.no_place"))
         }
     }
 

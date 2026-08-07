@@ -31,7 +31,7 @@ class ZoneBorderService(private val plugin: JavaPlugin) {
     fun show(zone: CaptureZone) {
         hide()
         val world = plugin.server.getWorld(zone.worldName) ?: return
-        val y = zone.minY + 0.1 // just above ground
+        val y = zone.objectiveY + 0.1 // just above the configured objective surface
 
         // Sweep leftover border entities from a previous unclean shutdown
         world.entities.filter { it.scoreboardTags.contains(BORDER_TAG) }.forEach { it.remove() }

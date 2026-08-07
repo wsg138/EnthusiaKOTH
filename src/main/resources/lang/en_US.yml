@@ -7,14 +7,14 @@ command:
     schedule: "<prefix><green>/ekoth schedule <gray>- Show KOTH schedule"
     top: "<prefix><green>/ekoth top [page] <gray>- KOTH leaderboard"
     stats: "<prefix><green>/ekoth stats [player] <gray>- Your KOTH stats"
-    start: "<prefix><red>/ekoth start <arena> [basic|advanced] <gray>- Start a KOTH"
+    start: "<prefix><red>/ekoth start <arena> [solo|guild] [basic|advanced] <gray>- Start a KOTH"
     stop: "<prefix><red>/ekoth stop <gray>- Force-end active KOTH"
     cancel: "<prefix><red>/ekoth cancel <gray>- Force-end active KOTH"
     giveflare: "<prefix><red>/ekoth giveflare <player> <arena> [amount] <gray>- Give flare"
     reload: "<prefix><red>/ekoth reload <gray>- Reload config"
     status: "<prefix><green>/ekoth status <gray>- Show server status"
     lock: "<shadow:#000000:1><prefix><green>/ekoth lock <unlocked|manual_locked|all_locked> <gray>- Set lock state"
-    private_usage: "<prefix><red>/ekoth private <start|join|leave|cancel> [arena]"
+    private_usage: "<prefix><red>/ekoth private start <arena> <solo|guild> <self|staff> [quick|production] <gray>- Private test"
 
   success:
     started: "<prefix><green>Started the <yellow><arena> <green>KOTH."
@@ -46,6 +46,7 @@ command:
     refund_failed: "<prefix><red>The KOTH did not start and the automatic refund failed. Contact an administrator immediately."
     concurrent_start: "<prefix><red>Another KOTH start is already being processed."
     invalid_start_tier: "<prefix><red>Start tier must be basic or advanced."
+    invalid_start_options: "<prefix><red>Start options must contain at most one solo/guild mode and one basic/advanced tier."
     schedule_disabled: "<prefix><red>Automatic KOTH scheduling is disabled."
 
   status:
@@ -78,18 +79,23 @@ command:
     lore_capturing_no: "<shadow:#000000:1><dark_gray>* <white>Capturing: <gray><capper>"
     lore_time_left_yes: "<shadow:#000000:1><dark_gray>* <white>Time Left: <green><time>"
     lore_time_left_no: "<shadow:#000000:1><dark_gray>* <white>Time Left: <gray><time>"
+    mode_name: "<shadow:#000000:1><gold>Mode: <yellow><mode>"
+    mode_lore: "<shadow:#000000:1><gray>Click to switch between solo and guild."
 
 private:
-  usage: "<prefix><red>/ekoth private <start|join|leave|cancel> [arena]"
+  usage: "<prefix><red>/ekoth private start <arena> <solo|guild> <self|staff> [quick|production] | join | leave | cancel"
   error:
     not_player: "<prefix><red>Only players can use this."
     arena_not_found: "<prefix><red>Arena not found. Available: <koths>"
     already_active: "<prefix><red>A KOTH is already active!"
     locked: "<prefix><red>Cannot start private test — check lock state."
+    conquest_unsupported: "<prefix><red>Conquest is not available for private testing."
     no_active: "<prefix><red>There is no active private KOTH to join."
     not_private: "<prefix><red>The current KOTH is not a private test."
     expired: "<prefix><red>This private KOTH is no longer accepting participants."
     is_owner: "<prefix><red>You are the owner of this private KOTH."
+    owner_only: "<prefix><red>This private KOTH is owner-only."
+    invalid_timing: "<prefix><red>Timing must be quick or production."
     not_owner: "<prefix><red>Only the owner can cancel this private KOTH."
     already_joined: "<prefix><red>You are already in this private KOTH."
     not_in_private: "<prefix><red>You are not in a private KOTH."
@@ -101,7 +107,9 @@ private:
     left: "<prefix><green>Left the private KOTH."
     cancelled: "<prefix><green>Your private KOTH has been cancelled."
   lobby_open: "<prefix><green>Private KOTH lobby open! <yellow>/ekoth private join <green>to join. Starting in <yellow><seconds>s."
-  started: "<prefix><green>Private KOTH started! Quick match: <duration>s, capture: <capture>s."
+  lobby_open_staff: "<prefix><green>Private KOTH staff lobby open! Authorized staff can use <yellow>/ekoth private join<green>. Starting in <yellow><seconds>s."
+  lobby_open_self: "<prefix><green>Owner-only private KOTH starts in <yellow><seconds>s<green>."
+  started: "<prefix><green>Private KOTH started! Duration: <duration>s, capture: <capture>s."
   objective_particles: "<shadow:#000000:1><gray>Follow the particles to the objective!"
 
 koth:

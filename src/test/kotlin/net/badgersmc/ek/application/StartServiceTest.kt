@@ -18,6 +18,94 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 class StartServiceTest {
+    @Test
+    fun `paid start is journaled before withdrawal and charged before event start`() {
+        val calls = mutableListOf<String>()
+        val payer = UUID.randomUUID()
+        val journal = object : PaymentJournal {
+            private var entry: PaymentJournalEntry? = null
+            override fun record(entry: PaymentJournalEntry): Boolean {
+                calls += "prepared"
+                this.entry = entry
+                return true
+            }
+            override fun update(transactionId: UUID, status: PaymentJournalStatus): Boolean {
+                calls += status.name.lowercase()
+                entry = entry?.copy(status = status)
+                return true
+            }
+            override fun entries(): List<PaymentJournalEntry> = listOfNotNull(entry)
+        }
+        val economy = object : PlayerEconomy {
+            override fun isAvailable() = true
+            override fun balance(playerId: UUID) = 100.0
+            override fun withdraw(playerId: UUID, amount: Double): Boolean {
+                calls += "withdraw"
+                return true
+            }
+            override fun deposit(playerId: UUID, amount: Double) = true
+        }
+        val service = StartService(
+            config = { config(basicCost = 5.0) },
+            pluginReady = { true },
+            hasConflictingEvent = { false },
+            economy = economy,
+            starter = EventStarter { _, _, _, _ ->
+                calls += "start"
+                true
+            },
+            logError = { _, _ -> },
+            paymentJournal = journal,
+        )
+
+        val result = service.start(
+            StartRequest(
+                actor = StartActor(payer, canStartBasic = true),
+                arena = arena,
+                source = StartSource.PLAYER_COMMAND,
+                tier = StartTier.BASIC,
+            ),
+        )
+
+        assertInstanceOf(StartResult.Started::class.java, result)
+        assertEquals(listOf("prepared", "withdraw", "charged", "start"), calls)
+    }
+
+    @Test
+    fun `successful start-failure refund stays unresolved when refund journal completion fails`() {
+        val payer = UUID.randomUUID()
+        var observedReceipt: PaymentReceipt? = null
+        val journal = RecordingJournal(failUpdates = setOf(PaymentJournalStatus.REFUNDED))
+        val economy = FakeEconomy(20.0)
+        val service = StartService(
+            config = { config(basicCost = 5.0) },
+            pluginReady = { true },
+            hasConflictingEvent = { false },
+            economy = economy,
+            starter = EventStarter { _, _, _, receipt ->
+                observedReceipt = receipt
+                false
+            },
+            logError = { _, _ -> },
+            paymentJournal = journal,
+        )
+
+        val result = service.start(
+            StartRequest(
+                actor = StartActor(payer, canStartBasic = true),
+                arena = arena,
+                source = StartSource.PLAYER_COMMAND,
+                tier = StartTier.BASIC,
+            ),
+        )
+
+        assertEquals(StartFailure.REFUND_FAILED, (result as StartResult.Rejected).failure)
+        assertEquals(20.0, economy.currentBalance)
+        assertEquals(1, economy.deposits)
+        assertEquals(PaymentReceipt.State.REFUNDING, observedReceipt?.state)
+        assertEquals(PaymentJournalStatus.REFUNDING, journal.entries().single().status)
+    }
+
     private val playerId = UUID.randomUUID()
     private val arena = mockk<KothArena>(relaxed = true)
 
@@ -230,6 +318,26 @@ class StartServiceTest {
         starter = starter,
         logError = logger,
     )
+
+    private class RecordingJournal(
+        private val failUpdates: Set<PaymentJournalStatus> = emptySet(),
+    ) : PaymentJournal {
+        private val records = linkedMapOf<UUID, PaymentJournalEntry>()
+
+        override fun record(entry: PaymentJournalEntry): Boolean {
+            records[entry.transactionId] = entry
+            return true
+        }
+
+        override fun update(transactionId: UUID, status: PaymentJournalStatus): Boolean {
+            if (status in failUpdates) return false
+            val current = records[transactionId] ?: return false
+            records[transactionId] = current.copy(status = status)
+            return true
+        }
+
+        override fun entries(): List<PaymentJournalEntry> = records.values.toList()
+    }
 
     private class FakeEconomy(
         var currentBalance: Double,

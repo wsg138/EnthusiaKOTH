@@ -14,6 +14,7 @@ import org.bukkit.event.EventHandler
 import org.bukkit.event.EventPriority
 import org.bukkit.event.Listener
 import org.bukkit.event.entity.EntityDamageByEntityEvent
+import org.bukkit.event.entity.EntityPlaceEvent
 import org.bukkit.event.entity.EntityToggleGlideEvent
 import org.bukkit.event.entity.ExplosionPrimeEvent
 import org.bukkit.event.entity.ProjectileLaunchEvent
@@ -21,6 +22,7 @@ import org.bukkit.event.player.PlayerInteractEvent
 import org.bukkit.event.player.PlayerMoveEvent
 import org.bukkit.event.player.PlayerTeleportEvent
 import org.bukkit.inventory.ItemStack
+import java.util.UUID
 
 /** Enforces event-scoped item, projectile, and movement restrictions. */
 class RestrictionListener(
@@ -41,18 +43,19 @@ class RestrictionListener(
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     fun onDamage(event: EntityDamageByEntityEvent) {
         val active = kothService.activeEvent ?: return
-        val attacker = damagingPlayer(event) ?: return
+        val attackerId = damagingPlayerId(event, active)
 
         if (active.isPrivateTest && event.entity is Player) {
             val victim = event.entity as Player
-            if (isInsideEventArea(active, attacker, victim)
-                && active.isParticipant(attacker.uniqueId) != active.isParticipant(victim.uniqueId)
+            if (isInsideEventArea(active, event)
+                && active.isParticipant(attackerId ?: UNKNOWN_ATTACKER) != active.isParticipant(victim.uniqueId)
             ) {
                 event.isCancelled = true
                 return
             }
         }
 
+        val attacker = damagingPlayer(event) ?: return
         if (!active.isParticipant(attacker.uniqueId)) return
         val use = damageUse(event, active, attacker) ?: return
         if (!use.appliesInsideZone) return
@@ -121,6 +124,16 @@ class RestrictionListener(
             else -> restrictions.canUseItem(player, active, launchItem(event.entity))
         }
         denyIfNeeded(player, decision) { event.isCancelled = true }
+    }
+
+    /** Track player-placed damaging entities (notably end crystals) for private-test isolation. */
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    fun onEntityPlaced(event: EntityPlaceEvent) {
+        if (event.isCancelled) return
+        val active = kothService.activeEvent ?: return
+        if (!active.isPrivateTest) return
+        val player = event.player ?: return
+        restrictions.recordIndirectSource(active, event.entity.uniqueId, player.uniqueId)
     }
 
     /** Snapshot every accepted participant projectile, including launches outside the zone. */
@@ -237,8 +250,17 @@ class RestrictionListener(
         else -> null
     }
 
-    private fun isInsideEventArea(event: KothEvent, first: Player, second: Player): Boolean =
-        event.arena.zone.contains(first.location) || event.arena.zone.contains(second.location)
+    private fun damagingPlayerId(event: EntityDamageByEntityEvent, active: KothEvent): UUID? {
+        damagingPlayer(event)?.let { return it.uniqueId }
+        val damager = event.damager
+        val causing = runCatching { event.damageSource.causingEntity }.getOrNull()
+        if (causing is Player) return causing.uniqueId
+        return causing?.let { restrictions.indirectSourceOwner(active, it.uniqueId) }
+            ?: restrictions.indirectSourceOwner(active, damager.uniqueId)
+    }
+
+    private fun isInsideEventArea(event: KothEvent, damage: EntityDamageByEntityEvent): Boolean =
+        event.arena.zone.contains(damage.entity.location) || event.arena.zone.contains(damage.damager.location)
 
     private inline fun denyIfNeeded(player: Player, decision: RestrictionDecision, deny: () -> Unit) {
         if (!decision.allowed) {
@@ -265,5 +287,6 @@ class RestrictionListener(
 
     companion object {
         private val DAMAGE_COOLDOWNS = setOf(RestrictedItemType.MACE, RestrictedItemType.SPEAR)
+        private val UNKNOWN_ATTACKER = UUID(0L, 0L)
     }
 }

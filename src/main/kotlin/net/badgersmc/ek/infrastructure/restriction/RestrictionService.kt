@@ -72,6 +72,7 @@ class RestrictionService(
     private data class EventState(
         val cooldowns: MutableMap<UUID, MutableMap<RestrictedItemType, Instant>> = ConcurrentHashMap(),
         val projectiles: MutableMap<UUID, ProjectileUseSnapshot> = ConcurrentHashMap(),
+        val indirectSources: MutableMap<UUID, UUID> = ConcurrentHashMap(),
     )
 
     private val states = ConcurrentHashMap<UUID, EventState>()
@@ -151,6 +152,13 @@ class RestrictionService(
     fun removeProjectile(eventId: UUID, projectileId: UUID) {
         states[eventId]?.projectiles?.remove(projectileId)
     }
+
+    fun recordIndirectSource(event: KothEvent, entityId: UUID, ownerId: UUID) {
+        states.computeIfAbsent(event.id) { EventState() }.indirectSources[entityId] = ownerId
+    }
+
+    fun indirectSourceOwner(event: KothEvent, entityId: UUID): UUID? =
+        states[event.id]?.indirectSources?.get(entityId)
 
     fun clearEvent(eventId: UUID) {
         states.remove(eventId)

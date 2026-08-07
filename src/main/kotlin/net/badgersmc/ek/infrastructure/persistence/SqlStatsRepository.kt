@@ -19,6 +19,8 @@ class SqlStatsRepository(
 
     private val arenaCache = ConcurrentHashMap<ArenaKey, Int>()
     private val familyCache = ConcurrentHashMap<FamilyKey, Int>()
+    private val legacyFamilyBaselineCache = ConcurrentHashMap<FamilyKey, Int>()
+    private val legacyArenaOffsetCache = ConcurrentHashMap<ArenaKey, Int>()
     private val totalCache = ConcurrentHashMap<String, Int>()
     private val nameCache = ConcurrentHashMap<String, String>()
     private val writer = Executors.newSingleThreadExecutor { runnable ->
@@ -37,6 +39,7 @@ class SqlStatsRepository(
         migrationOutcome = legacyStatsFile?.let { file ->
             LegacyStatsMigrator(dataSource, logger, migrationBeforeCommit).migrate(file)
         } ?: LegacyMigrationOutcome.NotNeeded
+        legacyStatsFile?.takeIf(File::isFile)?.let(::ensureLegacyPlaceholderBaselines)
         loadCaches()
         val failure = migrationOutcome as? LegacyMigrationOutcome.Failed
         if (failure != null) installFallback(failure.fallbackRecords)
@@ -55,8 +58,13 @@ class SqlStatsRepository(
         familyCache[FamilyKey(entityKey, family.lowercase())] ?: 0
 
     fun kothWins(entityKey: String, kothName: String): Int {
-        val exact = arenaCache[ArenaKey(entityKey, kothName.lowercase())] ?: 0
-        return if (exact > 0) exact else familyWins(entityKey, familyResolver(kothName))
+        val arenaKey = ArenaKey(entityKey, kothName.lowercase())
+        val exact = arenaCache[arenaKey] ?: 0
+        val familyKey = FamilyKey(entityKey, familyResolver(kothName).lowercase())
+        val legacyBaseline = legacyFamilyBaselineCache[familyKey]
+            ?: return if (exact > 0) exact else familyWins(entityKey, familyResolver(kothName))
+        val exactAtMigration = legacyArenaOffsetCache[arenaKey] ?: 0
+        return maxOf(legacyBaseline, exactAtMigration) + (exact - exactAtMigration).coerceAtLeast(0)
     }
 
     fun displayName(entityKey: String): String? = nameCache[entityKey]
@@ -109,6 +117,8 @@ class SqlStatsRepository(
     private fun loadCaches() {
         arenaCache.clear()
         familyCache.clear()
+        legacyFamilyBaselineCache.clear()
+        legacyArenaOffsetCache.clear()
         totalCache.clear()
         nameCache.clear()
         dataSource.connection.use { connection ->
@@ -121,6 +131,16 @@ class SqlStatsRepository(
                 statement.executeQuery("SELECT entity_key, family, wins FROM koth_family_stats").use { result ->
                     while (result.next()) {
                         familyCache[FamilyKey(result.getString(1), result.getString(2).lowercase())] = result.getInt(3)
+                    }
+                }
+                statement.executeQuery("SELECT entity_key, family, wins FROM koth_legacy_family_baselines").use { result ->
+                    while (result.next()) {
+                        legacyFamilyBaselineCache[FamilyKey(result.getString(1), result.getString(2).lowercase())] = result.getInt(3)
+                    }
+                }
+                statement.executeQuery("SELECT entity_key, koth_name, wins FROM koth_legacy_arena_offsets").use { result ->
+                    while (result.next()) {
+                        legacyArenaOffsetCache[ArenaKey(result.getString(1), result.getString(2).lowercase())] = result.getInt(3)
                     }
                 }
                 statement.executeQuery("SELECT entity_key, wins FROM koth_totals").use { result ->
@@ -163,6 +183,63 @@ class SqlStatsRepository(
             statement.executeUpdate("CREATE TABLE IF NOT EXISTS koth_totals (entity_key TEXT PRIMARY KEY, wins INTEGER NOT NULL)")
             statement.executeUpdate("CREATE TABLE IF NOT EXISTS koth_entity_names (entity_key TEXT PRIMARY KEY, display_name TEXT NOT NULL, updated_at INTEGER NOT NULL)")
             statement.executeUpdate("CREATE TABLE IF NOT EXISTS koth_migrations (id TEXT PRIMARY KEY, checksum TEXT NOT NULL, completed_at INTEGER NOT NULL)")
+            statement.executeUpdate("CREATE TABLE IF NOT EXISTS koth_legacy_family_baselines (entity_key TEXT NOT NULL, family TEXT NOT NULL, wins INTEGER NOT NULL, PRIMARY KEY(entity_key, family))")
+            statement.executeUpdate("CREATE TABLE IF NOT EXISTS koth_legacy_arena_offsets (entity_key TEXT NOT NULL, koth_name TEXT NOT NULL, wins INTEGER NOT NULL, PRIMARY KEY(entity_key, koth_name))")
+        }
+    }
+
+    private fun ensureLegacyPlaceholderBaselines(file: File) {
+        val records = LegacyStatsMigrator(dataSource, logger).parse(file).records
+        dataSource.connection.use { connection ->
+            val alreadySnapshotted = connection.createStatement().use { statement ->
+                statement.executeQuery("SELECT COUNT(*) FROM koth_legacy_family_baselines").use { result ->
+                    result.next() && result.getInt(1) > 0
+                }
+            }
+            if (alreadySnapshotted) return
+            connection.autoCommit = false
+            try {
+                records.forEach { record ->
+                    record.familyWins.forEach { (familyName, wins) ->
+                        val family = familyName.lowercase()
+                        connection.prepareStatement(
+                            "INSERT INTO koth_legacy_family_baselines(entity_key, family, wins) VALUES(?, ?, ?) " +
+                                "ON CONFLICT(entity_key, family) DO UPDATE SET wins = MAX(koth_legacy_family_baselines.wins, excluded.wins)",
+                        ).use { statement ->
+                            statement.setString(1, record.entityKey)
+                            statement.setString(2, family)
+                            statement.setInt(3, wins)
+                            statement.executeUpdate()
+                        }
+
+                        connection.prepareStatement(
+                            "SELECT koth_name, wins FROM koth_stats WHERE entity_key = ?",
+                        ).use { statement ->
+                            statement.setString(1, record.entityKey)
+                            statement.executeQuery().use { result ->
+                                while (result.next()) {
+                                    val arena = result.getString(1)
+                                    if (!familyResolver(arena).equals(family, ignoreCase = true)) continue
+                                    connection.prepareStatement(
+                                        "INSERT OR IGNORE INTO koth_legacy_arena_offsets(entity_key, koth_name, wins) VALUES(?, ?, ?)",
+                                    ).use { insert ->
+                                        insert.setString(1, record.entityKey)
+                                        insert.setString(2, arena.lowercase())
+                                        insert.setInt(3, result.getInt(2))
+                                        insert.executeUpdate()
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                connection.commit()
+            } catch (error: Throwable) {
+                connection.rollback()
+                logger("Failed to persist legacy KOTH placeholder baselines", error)
+            } finally {
+                connection.autoCommit = true
+            }
         }
     }
 

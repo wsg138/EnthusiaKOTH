@@ -1,8 +1,19 @@
 package net.badgersmc.ek.application
 
+import io.mockk.mockk
+import net.badgersmc.ek.domain.CaptureZone
+import net.badgersmc.ek.domain.KothArena
+import net.badgersmc.ek.domain.KothEvent
+import net.badgersmc.ek.domain.TeamId
+import net.badgersmc.ek.domain.TeamMode
+import org.bukkit.Location
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import java.time.Instant
+import java.util.UUID
 import kotlin.math.abs
 
 /**
@@ -18,6 +29,49 @@ class MovingPathTest {
     private val cx = 100.0
     private val cz = 200.0
     private val half = size / 2.0
+
+    @Test
+    fun `moving control accumulates score and never uses capture threshold`() {
+        val event = KothEvent(
+            id = UUID.randomUUID(),
+            arena = KothArena(
+                id = "moving",
+                family = "moving",
+                zone = mockk(relaxed = true),
+                durationSeconds = 300,
+                captureSeconds = 2,
+            ),
+            startsAt = Instant.EPOCH,
+            endsAt = Instant.EPOCH.plusSeconds(300),
+        )
+        val team = TeamId(TeamMode.SOLO, UUID.randomUUID())
+
+        repeat(5) { KothService.applyMovingScore(event, listOf(team)) }
+
+        assertEquals(5.0, event.scores[team])
+        assertEquals(team, event.currentController)
+        assertEquals(0.5f, KothService.displayProgress(event, Instant.EPOCH.plusSeconds(150)))
+        KothService.applyMovingScore(event, listOf(team, TeamId(TeamMode.SOLO, UUID.randomUUID())))
+        assertNull(event.currentController)
+        assertEquals(5.0, event.scores[team])
+    }
+
+    @Test
+    fun `moving capture requires vertical bounds and horizontal radius`() {
+        val zone = CaptureZone(
+            id = "moving-zone",
+            worldName = "world",
+            corner1 = Location(null, -10.0, 64.0, -10.0),
+            corner2 = Location(null, 10.0, 72.0, 10.0),
+            radius = 5.0,
+        )
+
+        assertTrue(KothService.isMovingCaptureEligible(zone, 3.0, 68.0, 4.0, 0.0, 0.0))
+        assertTrue(KothService.isMovingCaptureEligible(zone, 5.0, 64.0, 0.0, 0.0, 0.0))
+        assertFalse(KothService.isMovingCaptureEligible(zone, 0.0, 63.99, 0.0, 0.0, 0.0))
+        assertFalse(KothService.isMovingCaptureEligible(zone, 0.0, 72.01, 0.0, 0.0, 0.0))
+        assertFalse(KothService.isMovingCaptureEligible(zone, 5.01, 68.0, 0.0, 0.0, 0.0))
+    }
 
     @Test
     fun `point stays within the square bounds at all times`() {

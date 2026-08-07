@@ -213,6 +213,59 @@ class LegacyStatsMigrationTest {
     }
 
     @Test
+    fun `migrated family placeholder stays additive after first exact arena win`() {
+        val file = fixture("players-only.yml")
+        val source = dataSource()
+        val key = "solo:11111111-1111-1111-1111-111111111111"
+        val repository = SqlStatsRepository(
+            dataSource = source,
+            familyResolver = { "capture" },
+            legacyStatsFile = file,
+        )
+        repository.init()
+
+        assertEquals(3, repository.kothWins(key, "capture-arena"))
+        repository.incrementWin(key, "capture-arena")
+        assertEquals(4, repository.kothWins(key, "capture-arena"))
+        assertEquals(3, repository.kothWins(key, "another-capture-arena"))
+        repository.shutdown()
+
+        val restarted = SqlStatsRepository(
+            dataSource = source,
+            familyResolver = { "capture" },
+            legacyStatsFile = file,
+        )
+        restarted.init()
+        assertEquals(4, restarted.kothWins(key, "capture-arena"))
+        restarted.shutdown()
+    }
+
+    @Test
+    fun `newer exact arena value remains authoritative across legacy baseline`() {
+        val file = fixture("players-only.yml")
+        val source = dataSource()
+        val key = "solo:11111111-1111-1111-1111-111111111111"
+        SqlStatsRepository(source).also { it.init(); it.shutdown() }
+        source.connection.use { connection ->
+            connection.prepareStatement(
+                "INSERT INTO koth_stats(entity_key, koth_name, wins) VALUES(?, ?, ?)",
+            ).use {
+                it.setString(1, key)
+                it.setString(2, "capture-arena")
+                it.setInt(3, 7)
+                it.executeUpdate()
+            }
+        }
+
+        val repository = SqlStatsRepository(source, familyResolver = { "capture" }, legacyStatsFile = file)
+        repository.init()
+        assertEquals(7, repository.kothWins(key, "capture-arena"))
+        repository.incrementWin(key, "capture-arena")
+        assertEquals(8, repository.kothWins(key, "capture-arena"))
+        repository.shutdown()
+    }
+
+    @Test
     fun `existing arena rows backfill family aggregates`() {
         val source = dataSource()
         val key = "solo:33333333-3333-3333-3333-333333333333"

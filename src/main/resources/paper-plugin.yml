@@ -13,7 +13,7 @@ dependencies:
       join-classpath: true
     PlaceholderAPI:
       load: BEFORE
-      required: false
+      required: true
       join-classpath: true
     Vault:
       load: BEFORE
@@ -39,6 +39,8 @@ permissions:
       enthusiakoth.start.advanced: true
       enthusiakoth.flare.use: true
       enthusiakoth.privatetest: true
+      enthusiakoth.test.start: true
+      enthusiakoth.test.join: true
       enthusiakoth.protection.bypass: true
   enthusiakoth.start.basic:
     default: true
@@ -53,7 +55,19 @@ permissions:
     description: Use KOTH flare items
   enthusiakoth.privatetest:
     default: op
-    description: Start or cancel approved private KOTH tests
+    description: Legacy private-test management permission
+    children:
+      enthusiakoth.test.start: true
+  enthusiakoth.test.start:
+    default: op
+    description: Start or cancel private KOTH tests
+    children:
+      enthusiakoth.command: true
+  enthusiakoth.test.join:
+    default: false
+    description: Join staff-access private KOTH tests
+    children:
+      enthusiakoth.command: true
   enthusiakoth.protection.bypass:
     default: op
     description: Perform intentional player maintenance inside protected KOTH regions

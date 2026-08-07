@@ -3,6 +3,7 @@ package net.badgersmc.ek.application
 import net.badgersmc.ek.config.EnthusiaKothConfig
 import net.badgersmc.ek.domain.EventKind
 import net.badgersmc.ek.domain.KothArena
+import net.badgersmc.ek.domain.TeamMode
 import java.util.UUID
 import java.util.concurrent.locks.ReentrantLock
 
@@ -13,6 +14,7 @@ class StartService(
     private val economy: PlayerEconomy,
     private val starter: EventStarter,
     private val logError: (String, Throwable?) -> Unit,
+    private val paymentJournal: PaymentJournal = NoopPaymentJournal,
 ) {
     private val gate = ReentrantLock()
 
@@ -36,7 +38,7 @@ class StartService(
         if (!request.actor.isConsole && !request.actor.isAdmin) return StartResult.Rejected(StartFailure.NO_PERMISSION)
         if (!cfg.locks.state.allows(EventKind.ADMIN)) return StartResult.Rejected(StartFailure.LOCKED)
         if (hasConflictingEvent()) return StartResult.Rejected(StartFailure.ALREADY_ACTIVE)
-        return attemptStart(arena, EventKind.ADMIN, 0, null)
+        return attemptStart(arena, EventKind.ADMIN, 0, null, request.teamMode)
     }
 
     private fun startFlare(request: StartRequest, arena: KothArena, cfg: EnthusiaKothConfig): StartResult {
@@ -44,7 +46,7 @@ class StartService(
         if (!request.actor.canUseFlare) return StartResult.Rejected(StartFailure.NO_PERMISSION)
         if (!cfg.locks.state.allows(EventKind.FLARE)) return StartResult.Rejected(StartFailure.LOCKED)
         if (hasConflictingEvent()) return StartResult.Rejected(StartFailure.ALREADY_ACTIVE)
-        return attemptStart(arena, EventKind.FLARE, 0, null)
+        return attemptStart(arena, EventKind.FLARE, 0, null, request.teamMode)
     }
 
     private fun startPaid(request: StartRequest, arena: KothArena, cfg: EnthusiaKothConfig): StartResult {
@@ -85,18 +87,61 @@ class StartService(
         }
         if (balance + 1.0e-9 < cost) return StartResult.Rejected(StartFailure.INSUFFICIENT_FUNDS, cost, balance)
 
-        if (cost > 0.0) {
+        val receipt = if (cost > 0.0) {
+            val transactionId = UUID.randomUUID()
+            val createdAt = java.time.Instant.now()
+            val prepared = PaymentJournalEntry(
+                transactionId = transactionId,
+                payerId = playerId,
+                amount = cost,
+                source = request.source,
+                status = PaymentJournalStatus.PREPARED,
+                createdAt = createdAt,
+            )
+            if (!paymentJournal.record(prepared)) {
+                logError("Refusing paid KOTH start because its payment journal entry could not be persisted", null)
+                return StartResult.Rejected(StartFailure.PAYMENT_JOURNAL_FAILED, cost, balance)
+            }
+
             val withdrawn = try {
                 economy.withdraw(playerId, cost)
             } catch (error: Throwable) {
-                logError("Vault withdrawal threw for player $playerId amount $cost", error)
+                // PREPARED is intentionally retained: an exception can happen after a
+                // provider accepted the withdrawal, so startup must flag it as ambiguous.
+                logError("Vault withdrawal threw for player $playerId amount $cost; payment journal remains PREPARED", error)
                 return StartResult.Rejected(StartFailure.WITHDRAWAL_FAILED, cost, balance)
             }
-            if (!withdrawn) return StartResult.Rejected(StartFailure.WITHDRAWAL_FAILED, cost, balance)
-        }
+            if (!withdrawn) {
+                if (!paymentJournal.update(transactionId, PaymentJournalStatus.CANCELLED)) {
+                    logError(
+                        "Vault rejected the KOTH withdrawal, but its PREPARED journal entry could not be marked CANCELLED; manual reconciliation is required",
+                        null,
+                    )
+                    return StartResult.Rejected(StartFailure.PAYMENT_JOURNAL_FAILED, cost, balance)
+                }
+                return StartResult.Rejected(StartFailure.WITHDRAWAL_FAILED, cost, balance)
+            }
 
-        val receipt = cost.takeIf { it > 0.0 }?.let { PaymentReceipt(playerId, it, request.source) }
-        return attemptStart(arena, kind, manual.delaySeconds, receipt)
+            val chargedReceipt = PaymentReceipt(
+                payerId = playerId,
+                amount = cost,
+                source = request.source,
+                transactionId = transactionId,
+                journal = paymentJournal,
+            )
+            if (!paymentJournal.update(transactionId, PaymentJournalStatus.CHARGED)) {
+                val refunded = refund(chargedReceipt, "payment journal transition failure", null)
+                return StartResult.Rejected(
+                    if (refunded) StartFailure.PAYMENT_JOURNAL_FAILED else StartFailure.REFUND_FAILED,
+                    cost,
+                    balance,
+                )
+            }
+            chargedReceipt
+        } else {
+            null
+        }
+        return attemptStart(arena, kind, manual.delaySeconds, receipt, request.teamMode)
     }
 
     private fun attemptStart(
@@ -104,9 +149,10 @@ class StartService(
         kind: EventKind,
         delaySeconds: Int,
         receipt: PaymentReceipt?,
+        teamMode: TeamMode,
     ): StartResult {
         val started = try {
-            starter.start(arena, kind, delaySeconds, receipt)
+            starter.start(arena, kind, delaySeconds, receipt, teamMode)
         } catch (error: Throwable) {
             return failedAfterPayment(StartFailure.START_THREW, receipt, error)
         }
@@ -137,10 +183,19 @@ class StartService(
         val refunded = try {
             economy.deposit(receipt.payerId, receipt.amount)
         } catch (refundError: Throwable) {
-            logError("KOTH $reason refund threw for player ${receipt.payerId} amount ${receipt.amount}", refundError)
-            false
+            logError(
+                "KOTH $reason refund threw for player ${receipt.payerId} amount ${receipt.amount}; journal remains REFUNDING for manual reconciliation",
+                refundError,
+            )
+            return false
         }
-        receipt.completeRefund(refunded)
+        if (!receipt.completeRefund(refunded)) {
+            logError(
+                "KOTH $reason refund result could not be persisted for player ${receipt.payerId} amount ${receipt.amount}; durable state remains REFUNDING for manual reconciliation",
+                cause,
+            )
+            return false
+        }
         if (!refunded) {
             logError("KOTH $reason refund failed for player ${receipt.payerId} amount ${receipt.amount}", cause)
         }
@@ -153,6 +208,7 @@ data class StartRequest(
     val arena: KothArena?,
     val source: StartSource,
     val tier: StartTier? = null,
+    val teamMode: TeamMode = TeamMode.SOLO,
 )
 
 data class StartActor(
@@ -181,6 +237,7 @@ enum class StartFailure {
     WITHDRAWAL_FAILED,
     START_FAILED,
     START_THREW,
+    PAYMENT_JOURNAL_FAILED,
     REFUND_FAILED,
     CONCURRENT_REQUEST,
 }
@@ -195,7 +252,22 @@ sealed interface StartResult {
 }
 
 fun interface EventStarter {
-    fun start(arena: KothArena, kind: EventKind, delaySeconds: Int, payment: PaymentReceipt?): Boolean
+    /** Legacy/default entry point retained so existing adapters and tests remain source-compatible. */
+    fun start(
+        arena: KothArena,
+        kind: EventKind,
+        delaySeconds: Int,
+        payment: PaymentReceipt?,
+    ): Boolean
+
+    /** Mode-aware production entry point. Implementations that care about team mode override this overload. */
+    fun start(
+        arena: KothArena,
+        kind: EventKind,
+        delaySeconds: Int,
+        payment: PaymentReceipt?,
+        teamMode: TeamMode,
+    ): Boolean = start(arena, kind, delaySeconds, payment)
 }
 
 interface PlayerEconomy {

@@ -12,6 +12,7 @@ import org.bukkit.Material
 import org.bukkit.World
 import org.bukkit.entity.AbstractArrow
 import org.bukkit.entity.AbstractWindCharge
+import org.bukkit.entity.EnderCrystal
 import org.bukkit.entity.Entity
 import org.bukkit.entity.Player
 import org.bukkit.entity.Projectile
@@ -25,6 +26,31 @@ import java.time.Instant
 import java.util.UUID
 
 class RestrictionListenerTest {
+    @Test
+    fun `private participant is isolated from nonparticipant placed crystal damage`() {
+        val fixture = fixture(RuleSet(), privateTest = true)
+        val victim = mockk<Player>(relaxed = true)
+        val victimId = UUID.randomUUID()
+        every { victim.uniqueId } returns victimId
+        every { victim.location } returns fixture.inside
+        fixture.event.join(victimId)
+
+        val crystal = mockk<EnderCrystal>(relaxed = true)
+        val crystalId = UUID.randomUUID()
+        every { crystal.uniqueId } returns crystalId
+        every { crystal.location } returns fixture.inside
+        fixture.restrictions.recordIndirectSource(fixture.event, crystalId, UUID.randomUUID())
+
+        val damage = mockk<EntityDamageByEntityEvent>(relaxed = true)
+        every { damage.damager } returns crystal
+        every { damage.entity } returns victim
+        every { damage.isCancelled } returns false
+
+        fixture.listener.onDamage(damage)
+
+        verify { damage.isCancelled = true }
+    }
+
     @Test
     fun `cancelled projectile launch never creates snapshot or cooldown`() {
         val fixture = fixture(RuleSet(enderPearlCooldownSeconds = 30))
@@ -138,7 +164,7 @@ class RestrictionListenerTest {
         return item
     }
 
-    private fun fixture(rules: RuleSet): Fixture {
+    private fun fixture(rules: RuleSet, privateTest: Boolean = false): Fixture {
         val world = mockk<World>()
         every { world.name } returns "world"
         val inside = Location(world, 5.0, 64.0, 5.0)
@@ -153,6 +179,7 @@ class RestrictionListenerTest {
             KothArena("capture", "capture", zone, durationSeconds = 60, captureSeconds = 10),
             Instant.EPOCH,
             Instant.EPOCH.plusSeconds(60),
+            isPrivateTest = privateTest,
         )
         val inventory = mockk<PlayerInventory>(relaxed = true)
         every { inventory.itemInMainHand } returns item(Material.AIR)
