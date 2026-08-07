@@ -32,9 +32,19 @@ data class QueuedEvent(
     val nextAttemptAt: Instant = scheduledAt,
 )
 
+enum class CancellationReason {
+    ADMINISTRATIVE,
+    PRIVATE_OWNER,
+    RELOAD,
+    PLUGIN_DISABLE,
+    STARTUP_DELAY_CANCELLED,
+    ACTIVATION_FAILURE,
+}
+
 class KothService(
     private val cfgLoader: () -> EnthusiaKothConfig,
     private val stats: SqlStatsRepository,
+    private val economy: PlayerEconomy,
     private val guilds: LumaGuildsAdapter,
     private val displayService: DisplayService,
     private val fireworkService: FireworkCelebrationService,
@@ -45,6 +55,7 @@ class KothService(
     private val queueStore: EventQueueStore,
     private val clock: Clock,
     private val logger: (String, Throwable?) -> Unit,
+    private val eventTerminated: (UUID) -> Unit = {},
 ) {
     companion object {
         private const val MAX_QUEUE_ATTEMPTS = 60
@@ -73,9 +84,11 @@ class KothService(
     @Volatile var activeEvent: KothEvent? = null
     private val reminderCounters = mutableMapOf<String, Int>()
     private val eventQueue = queueStore.load().toMutableList()
+    private var queueDirty = false
     private var discordLastUpdate: Long? = null
 
     fun tick() {
+        if (queueDirty) persistQueue()
         val event = activeEvent
         if (event == null) {
             processQueue()
@@ -84,7 +97,14 @@ class KothService(
         val now = clock.instant()
         val cfg = cfgLoader()
         when (event.state) {
-            EventState.STARTING -> if (!now.isBefore(event.startsAt)) activateEvent(event, cfg)
+            EventState.STARTING -> if (!now.isBefore(event.startsAt)) {
+                try {
+                    activateEvent(event, cfg)
+                } catch (error: Throwable) {
+                    logger("KOTH '${event.arena.id}' failed during delayed activation", error)
+                    cancelEvent(event, CancellationReason.ACTIVATION_FAILURE, announce = false)
+                }
+            }
             EventState.ACTIVE -> tickActive(event, cfg)
             else -> Unit
         }
@@ -285,6 +305,7 @@ class KothService(
 
     private fun finishEvent(event: KothEvent, winner: TeamId?) {
         event.state = EventState.COMPLETED
+        event.paymentReceipt?.settle()
         if (winner != null) {
             sendEventMessage(
                 event,
@@ -295,11 +316,14 @@ class KothService(
                 stats.save()
                 executeRewards(event, winner)
             }
+        } else {
+            sendEventMessage(event, lang.msg("koth.no_winner", "koth_name" to event.arena.id))
         }
         val wasContested = event.scores.size > 1
         event.clearScores()
         event.currentController = null
         activeEvent = null
+        eventTerminated(event.id)
         reminderCounters.remove(event.arena.id)
         discordLastUpdate = null
         displayService.clear()
@@ -317,9 +341,15 @@ class KothService(
         val guildId = winner.id.takeIf { winner.mode == TeamMode.GUILD }
         cfgLoader().rewards[arena.family.lowercase()]?.let { reward ->
             if (winner.mode == TeamMode.GUILD && reward.guildVaultMoney > 0.0) {
-                guilds.depositToVault(winner.id, reward.guildVaultMoney, "KOTH win reward")
+                val deposited = runCatching { guilds.depositToVault(winner.id, reward.guildVaultMoney, "KOTH win reward") }
+                    .onFailure { logger("Guild reward deposit threw for ${winner.id} amount ${reward.guildVaultMoney}", it) }
+                    .getOrDefault(false)
+                if (!deposited) logger("Guild reward deposit failed for ${winner.id} amount ${reward.guildVaultMoney}", null)
             } else if (winner.mode == TeamMode.SOLO && reward.soloVaultMoney > 0.0) {
-                Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "eco give $name ${reward.soloVaultMoney}")
+                val deposited = runCatching { economy.deposit(winner.id, reward.soloVaultMoney) }
+                    .onFailure { logger("Solo Vault reward deposit threw for ${winner.id} amount ${reward.soloVaultMoney}", it) }
+                    .getOrDefault(false)
+                if (!deposited) logger("Solo Vault reward deposit failed for ${winner.id} amount ${reward.soloVaultMoney}", null)
             }
         }
         arena.rewards.forEach { executeRewardCommand(it, event, name, guildId) }
@@ -333,20 +363,27 @@ class KothService(
         val resolved = command.replace("{PLAYER}", name).replace("{FACTION}", name).replace("{KOTH}", event.arena.id)
         if (resolved.contains("{ALL_ONLINE}") && guildId != null) {
             guilds.onlineMembers(guildId).forEach { member ->
-                Bukkit.dispatchCommand(Bukkit.getConsoleSender(), resolved.replace("{ALL_ONLINE}", member.name))
+                val command = resolved.replace("{ALL_ONLINE}", member.name)
+                if (!Bukkit.dispatchCommand(Bukkit.getConsoleSender(), command)) logger("KOTH reward command was rejected: $command", null)
             }
         } else if (resolved.contains("{ALL_ONLINE}")) {
             Bukkit.getOnlinePlayers().forEach { player ->
-                Bukkit.dispatchCommand(Bukkit.getConsoleSender(), resolved.replace("{ALL_ONLINE}", player.name))
+                val command = resolved.replace("{ALL_ONLINE}", player.name)
+                if (!Bukkit.dispatchCommand(Bukkit.getConsoleSender(), command)) logger("KOTH reward command was rejected: $command", null)
             }
-        } else Bukkit.dispatchCommand(Bukkit.getConsoleSender(), resolved)
+        } else if (!Bukkit.dispatchCommand(Bukkit.getConsoleSender(), resolved)) {
+            logger("KOTH reward command was rejected: $resolved", null)
+        }
     }
 
     private fun executeBankReward(command: String, guildId: UUID?): Boolean {
         if (!command.startsWith("bank", ignoreCase = true)) return false
         if (guildId == null) return true
         val amount = command.split("\\s+".toRegex()).getOrNull(1)?.toDoubleOrNull() ?: return true
-        guilds.depositToVault(guildId, amount, "KOTH guild reward")
+        val deposited = runCatching { guilds.depositToVault(guildId, amount, "KOTH guild reward") }
+            .onFailure { logger("KOTH bank reward threw for $guildId amount $amount", it) }
+            .getOrDefault(false)
+        if (!deposited) logger("KOTH bank reward failed for $guildId amount $amount", null)
         return true
     }
 
@@ -356,6 +393,7 @@ class KothService(
         durationOverride: Int? = null,
         kind: EventKind = EventKind.PLAYER_COMMAND,
         delaySeconds: Int = 0,
+        paymentReceipt: PaymentReceipt? = null,
     ): Boolean {
         if (activeEvent != null) return false
         val cfg = cfgLoader()
@@ -368,9 +406,18 @@ class KothService(
             startsAt = start,
             endsAt = start.plusSeconds((durationOverride ?: arena.durationSeconds).toLong()),
             state = if (delaySeconds > 0) EventState.STARTING else EventState.ACTIVE,
+            paymentReceipt = paymentReceipt,
         )
         activeEvent = event
-        if (event.state == EventState.ACTIVE) activateEvent(event, cfg)
+        if (event.state == EventState.ACTIVE) {
+            try {
+                activateEvent(event, cfg)
+            } catch (error: Throwable) {
+                logger("KOTH '${arena.id}' failed during activation", error)
+                cancelEvent(event, CancellationReason.ACTIVATION_FAILURE, announce = false)
+                return false
+            }
+        }
         return true
     }
 
@@ -381,8 +428,12 @@ class KothService(
         scheduledAt: Instant = clock.instant(),
     ): Boolean {
         if (activeEvent == null && startEvent(arena, kind = kind)) return true
-        eventQueue += QueuedEvent(arena.id, kind, scheduledAt)
-        persistQueue()
+        val queued = QueuedEvent(arena.id, kind, scheduledAt)
+        eventQueue += queued
+        if (!persistQueue()) {
+            eventQueue.remove(queued)
+            return false
+        }
         return true
     }
 
@@ -422,16 +473,23 @@ class KothService(
     fun queuedEvents(): List<QueuedEvent> = synchronized(this) { eventQueue.toList() }
 
     @Synchronized
-    fun clearQueue() {
+    fun clearQueue(): Boolean {
+        val previous = eventQueue.toList()
         eventQueue.clear()
-        persistQueue()
+        if (persistQueue()) return true
+        eventQueue.addAll(previous)
+        return false
     }
 
-    private fun persistQueue() {
-        try {
+    private fun persistQueue(): Boolean {
+        return try {
             queueStore.save(eventQueue)
+            queueDirty = false
+            true
         } catch (error: Throwable) {
+            queueDirty = true
             logger("Failed to persist KOTH queue; restart recovery is at risk", error)
+            false
         }
     }
 
@@ -466,18 +524,40 @@ class KothService(
     }
 
     @Synchronized
-    fun forceEnd(): Boolean {
+    fun forceEnd(
+        reason: CancellationReason = CancellationReason.ADMINISTRATIVE,
+        announce: Boolean = reason == CancellationReason.ADMINISTRATIVE,
+    ): Boolean {
         val event = activeEvent ?: return false
-        sendEventMessage(event, lang.msg("koth.ended", "koth_name" to event.arena.id))
+        return cancelEvent(event, reason, announce)
+    }
+
+    private fun cancelEvent(event: KothEvent, reason: CancellationReason, announce: Boolean): Boolean {
+        if (activeEvent !== event) return false
+        if (announce) sendEventMessage(event, lang.msg("koth.ended", "koth_name" to event.arena.id))
+        refundPayment(event, reason)
         event.state = EventState.CANCELLED
         event.clearScores()
         event.currentController = null
         activeEvent = null
+        eventTerminated(event.id)
         reminderCounters.remove(event.arena.id)
         discordLastUpdate = null
         displayService.clear()
         zoneBorderService.hide()
+        processQueue()
         return true
+    }
+
+    private fun refundPayment(event: KothEvent, reason: CancellationReason): Boolean {
+        val receipt = event.paymentReceipt ?: return true
+        if (!receipt.beginRefund()) return receipt.isRefunded() || !receipt.isOutstanding()
+        val refunded = runCatching { economy.deposit(receipt.payerId, receipt.amount) }
+            .onFailure { logger("KOTH ${reason.name.lowercase()} refund threw for ${receipt.payerId} amount ${receipt.amount}", it) }
+            .getOrDefault(false)
+        receipt.completeRefund(refunded)
+        if (!refunded) logger("KOTH ${reason.name.lowercase()} refund failed for ${receipt.payerId} amount ${receipt.amount}", null)
+        return refunded
     }
 
     private fun resolveTeams(players: List<Player>, arena: KothArena): List<TeamId> =
@@ -531,8 +611,8 @@ class KothService(
         return if (minutes > 0) "${minutes}m ${remainder}s" else "${remainder}s"
     }
 
-    fun shutdown() {
-        forceEnd()
+    fun shutdown(reason: CancellationReason = CancellationReason.PLUGIN_DISABLE) {
+        forceEnd(reason, announce = false)
         persistQueue()
     }
 }

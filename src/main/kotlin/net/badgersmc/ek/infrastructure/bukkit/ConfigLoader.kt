@@ -238,6 +238,7 @@ private object PrivateTestingConfigLoader {
         lobbySeconds = integer(config, "private-testing.lobby-seconds", 0).coerceAtLeast(0),
         quickMatchDurationSeconds = integer(config, "private-testing.quick-match-duration-seconds", 120).coerceAtLeast(1),
         quickCaptureSeconds = integer(config, "private-testing.quick-capture-seconds", 15).coerceAtLeast(1),
+        showObjectiveParticles = boolean(config, "private-testing.show-objective-particles", true),
     )
 }
 

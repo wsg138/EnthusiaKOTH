@@ -15,6 +15,7 @@ import net.badgersmc.ek.domain.LockState
 import net.badgersmc.ek.infrastructure.discord.DiscordWebhookService
 import net.badgersmc.ek.infrastructure.display.ZoneBorderService
 import net.badgersmc.ek.infrastructure.lumaguilds.LumaGuildsAdapter
+import net.badgersmc.ek.infrastructure.persistence.EventQueueStore
 import net.badgersmc.ek.infrastructure.persistence.InMemoryEventQueueStore
 import net.badgersmc.ek.infrastructure.persistence.SqlStatsRepository
 import net.badgersmc.nexus.i18n.LangService
@@ -99,8 +100,21 @@ class KothQueueTest {
         assertEquals(listOf("alpha", "beta"), store.load().map { it.arenaId })
     }
 
+    @Test
+    fun `queue write failure rejects enqueue and leaves no volatile ghost entry`() {
+        val arena = arena("capture")
+        val store = object : EventQueueStore {
+            override fun load(): List<QueuedEvent> = emptyList()
+            override fun save(queue: List<QueuedEvent>) { error("disk full") }
+        }
+        val service = service(store, LockState.ALL_LOCKED, mapOf(arena.id to arena))
+
+        assertTrue(!service.queueStart(arena, EventKind.SCHEDULED, now))
+        assertTrue(service.queuedEvents().isEmpty())
+    }
+
     private fun service(
-        store: InMemoryEventQueueStore,
+        store: EventQueueStore,
         lock: LockState,
         arenaMap: Map<String, KothArena>,
         logs: MutableList<String> = mutableListOf(),
@@ -116,6 +130,7 @@ class KothQueueTest {
                 )
             },
             stats = mockk<SqlStatsRepository>(relaxed = true),
+            economy = mockk<PlayerEconomy>(relaxed = true),
             guilds = mockk<LumaGuildsAdapter>(relaxed = true),
             displayService = mockk<DisplayService>(relaxed = true),
             fireworkService = mockk<FireworkCelebrationService>(relaxed = true),

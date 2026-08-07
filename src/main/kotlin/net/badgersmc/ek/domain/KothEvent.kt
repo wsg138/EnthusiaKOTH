@@ -1,5 +1,6 @@
 package net.badgersmc.ek.domain
 
+import net.badgersmc.ek.application.PaymentReceipt
 import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -13,6 +14,7 @@ data class KothEvent(
     val owner: UUID? = null,
     val isPrivateTest: Boolean = false,
     val lobbySeconds: Int = 0,
+    val paymentReceipt: PaymentReceipt? = null,
 ) {
     val scores: MutableMap<TeamId, Double> = ConcurrentHashMap()
     val participants: MutableSet<UUID> = ConcurrentHashMap.newKeySet()

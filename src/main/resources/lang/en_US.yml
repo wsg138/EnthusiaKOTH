@@ -46,6 +46,7 @@ command:
     refund_failed: "<prefix><red>The KOTH did not start and the automatic refund failed. Contact an administrator immediately."
     concurrent_start: "<prefix><red>Another KOTH start is already being processed."
     invalid_start_tier: "<prefix><red>Start tier must be basic or advanced."
+    schedule_disabled: "<prefix><red>Automatic KOTH scheduling is disabled."
 
   status:
     line: "<shadow:#000000:1><gray><strikethrough>----------------------------------------</strikethrough>"
@@ -89,6 +90,7 @@ private:
     not_private: "<prefix><red>The current KOTH is not a private test."
     expired: "<prefix><red>This private KOTH is no longer accepting participants."
     is_owner: "<prefix><red>You are the owner of this private KOTH."
+    not_owner: "<prefix><red>Only the owner can cancel this private KOTH."
     already_joined: "<prefix><red>You are already in this private KOTH."
     not_in_private: "<prefix><red>You are not in a private KOTH."
     owner_cancel: "<prefix><red>The owner must use /ekoth private cancel instead."
@@ -111,6 +113,7 @@ koth:
   ended: "<prefix><red>The KOTH <yellow><koth_name><red> has been forcefully ended!"
   ended_first_capture: "<prefix><red>The KOTH <yellow><koth_name><red> has ended — first capture! Congratulations <player>!"
   no_captures: "<prefix><red>No captures were made during that KOTH."
+  no_winner: "<prefix><red>The <yellow><koth_name><red> KOTH ended without a winner."
   warning_minutes: "<prefix><green><koth_name> <green>starts in <minutes> minutes!"
   reminder: "<prefix><green>Reminder that the <yellow><koth_name><green> KOTH is still active! <capper> <dark_gray>(<time_left>)</dark_gray> is currently capturing."
 

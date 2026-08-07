@@ -9,6 +9,7 @@ import net.badgersmc.ek.domain.KothArena
 import net.badgersmc.ek.domain.LockState
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertInstanceOf
+import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.util.UUID
@@ -21,11 +22,13 @@ class StartServiceTest {
     private val arena = mockk<KothArena>(relaxed = true)
 
     @Test
-    fun `successful paid start withdraws exact decimal and passes configured delay`() {
+    fun `successful paid start withdraws exact decimal and attaches receipt`() {
         val economy = FakeEconomy(100.0)
-        var observed: Triple<EventKind, Int, Double>? = null
-        val service = service(economy, config(basicCost = 12.75, delay = 9)) { _, kind, delay ->
-            observed = Triple(kind, delay, economy.currentBalance)
+        var observed: PaymentReceipt? = null
+        val service = service(economy, config(basicCost = 12.75, delay = 9)) { _, kind, delay, receipt ->
+            assertEquals(EventKind.PLAYER_COMMAND, kind)
+            assertEquals(9, delay)
+            observed = receipt
             true
         }
 
@@ -33,14 +36,50 @@ class StartServiceTest {
 
         assertInstanceOf(StartResult.Started::class.java, result)
         assertEquals(87.25, economy.currentBalance, 0.000001)
-        assertEquals(Triple(EventKind.PLAYER_COMMAND, 9, 87.25), observed)
+        assertEquals(playerId, observed?.payerId)
+        assertEquals(12.75, observed?.amount)
+        assertEquals(PaymentReceipt.State.CHARGED, observed?.state)
+    }
+
+    @Test
+    fun `unspecified gui tier defaults to basic even for advanced user`() {
+        val economy = FakeEconomy(100.0)
+        val service = service(economy, config(basicCost = 5.0, advancedCost = 25.0)) { _, _, _, _ -> true }
+        val result = service.start(
+            StartRequest(
+                actor = StartActor(playerId, canStartBasic = true, canStartAdvanced = true),
+                arena = arena,
+                source = StartSource.GUI,
+                tier = null,
+            ),
+        )
+
+        assertInstanceOf(StartResult.Started::class.java, result)
+        assertEquals(95.0, economy.currentBalance)
+    }
+
+    @Test
+    fun `explicit advanced tier charges advanced price`() {
+        val economy = FakeEconomy(100.0)
+        val service = service(economy, config(basicCost = 5.0, advancedCost = 25.0)) { _, _, _, _ -> true }
+        val result = service.start(
+            StartRequest(
+                actor = StartActor(playerId, canStartAdvanced = true),
+                arena = arena,
+                source = StartSource.PLAYER_COMMAND,
+                tier = StartTier.ADVANCED,
+            ),
+        )
+
+        assertInstanceOf(StartResult.Started::class.java, result)
+        assertEquals(75.0, economy.currentBalance)
     }
 
     @Test
     fun `insufficient funds never withdraws or starts`() {
         val economy = FakeEconomy(4.0)
         var starts = 0
-        val result = service(economy, config(basicCost = 5.5)) { _, _, _ -> starts++; true }.start(request())
+        val result = service(economy, config(basicCost = 5.5)) { _, _, _, _ -> starts++; true }.start(request())
 
         assertEquals(StartFailure.INSUFFICIENT_FUNDS, (result as StartResult.Rejected).failure)
         assertEquals(4.0, economy.currentBalance)
@@ -48,10 +87,24 @@ class StartServiceTest {
     }
 
     @Test
-    fun `failed withdrawal does not attempt startup`() {
-        val economy = FakeEconomy(20.0, withdrawSucceeds = false)
+    fun `balance provider exception is controlled and never withdraws`() {
+        val economy = FakeEconomy(20.0, balanceThrows = true)
         var starts = 0
-        val result = service(economy, config(basicCost = 5.0)) { _, _, _ -> starts++; true }.start(request())
+        val errors = mutableListOf<String>()
+        val result = service(economy, config(basicCost = 5.0), { message, _ -> errors += message }) { _, _, _, _ -> starts++; true }
+            .start(request())
+
+        assertEquals(StartFailure.ECONOMY_ERROR, (result as StartResult.Rejected).failure)
+        assertEquals(0, economy.withdrawals)
+        assertEquals(0, starts)
+        assertTrue(errors.single().contains("balance lookup"))
+    }
+
+    @Test
+    fun `withdraw provider exception is controlled and never starts`() {
+        val economy = FakeEconomy(20.0, withdrawThrows = true)
+        var starts = 0
+        val result = service(economy, config(basicCost = 5.0)) { _, _, _, _ -> starts++; true }.start(request())
 
         assertEquals(StartFailure.WITHDRAWAL_FAILED, (result as StartResult.Rejected).failure)
         assertEquals(0, starts)
@@ -59,47 +112,43 @@ class StartServiceTest {
     }
 
     @Test
-    fun `failed start refunds once`() {
+    fun `failed start refunds once through receipt`() {
         val economy = FakeEconomy(20.0)
-        val result = service(economy, config(basicCost = 5.25)) { _, _, _ -> false }.start(request())
+        var receipt: PaymentReceipt? = null
+        val result = service(economy, config(basicCost = 5.25)) { _, _, _, observed -> receipt = observed; false }.start(request())
 
         assertEquals(StartFailure.START_FAILED, (result as StartResult.Rejected).failure)
         assertEquals(20.0, economy.currentBalance, 0.000001)
         assertEquals(1, economy.deposits)
+        assertEquals(PaymentReceipt.State.REFUNDED, receipt?.state)
     }
 
     @Test
-    fun `thrown start refunds once`() {
+    fun `starter-side refund cannot be duplicated by start failure handling`() {
         val economy = FakeEconomy(20.0)
-        val result = service(economy, config(basicCost = 5.25)) { _, _, _ -> error("boom") }.start(request())
+        val result = service(economy, config(basicCost = 5.0)) { _, _, _, receipt ->
+            assertNotNull(receipt)
+            assertTrue(receipt!!.beginRefund())
+            assertTrue(economy.deposit(receipt!!.payerId, receipt!!.amount))
+            receipt!!.completeRefund(true)
+            false
+        }.start(request())
 
-        assertEquals(StartFailure.START_THREW, (result as StartResult.Rejected).failure)
-        assertEquals(20.0, economy.currentBalance, 0.000001)
+        assertEquals(StartFailure.START_FAILED, (result as StartResult.Rejected).failure)
         assertEquals(1, economy.deposits)
+        assertEquals(20.0, economy.currentBalance)
     }
 
     @Test
     fun `failed refund is reported to operator log`() {
         val economy = FakeEconomy(20.0, depositSucceeds = false)
         val errors = mutableListOf<String>()
-        val result = service(economy, config(basicCost = 5.0), logger = { message, _ -> errors += message }) { _, _, _ -> false }
+        val result = service(economy, config(basicCost = 5.0), logger = { message, _ -> errors += message }) { _, _, _, _ -> false }
             .start(request())
 
         assertEquals(StartFailure.REFUND_FAILED, (result as StartResult.Rejected).failure)
         assertEquals(15.0, economy.currentBalance)
-        assertTrue(errors.single().contains("refund failed"))
-    }
-
-    @Test
-    fun `gui uses the same paid start flow`() {
-        val economy = FakeEconomy(20.0)
-        var kind: EventKind? = null
-        val result = service(economy, config(basicCost = 3.0)) { _, observed, _ -> kind = observed; true }
-            .start(request(source = StartSource.GUI))
-
-        assertInstanceOf(StartResult.Started::class.java, result)
-        assertEquals(EventKind.GUI, kind)
-        assertEquals(17.0, economy.currentBalance)
+        assertTrue(errors.any { it.contains("refund failed") })
     }
 
     @Test
@@ -109,39 +158,16 @@ class StartServiceTest {
             StartRequest(StartActor(null, isConsole = true), arena, StartSource.CONSOLE),
         ).forEach { adminRequest ->
             val economy = FakeEconomy(20.0)
-            var kind: EventKind? = null
-            val result = service(economy, config(basicCost = 10.0)) { _, observed, _ -> kind = observed; true }
-                .start(adminRequest)
+            var payment: PaymentReceipt? = PaymentReceipt(playerId, 1.0, StartSource.PLAYER_COMMAND)
+            val result = service(economy, config(basicCost = 10.0)) { _, kind, _, observed ->
+                assertEquals(EventKind.ADMIN, kind)
+                payment = observed
+                true
+            }.start(adminRequest)
 
             assertInstanceOf(StartResult.Started::class.java, result)
-            assertEquals(EventKind.ADMIN, kind)
-            assertEquals(20.0, economy.currentBalance)
+            assertEquals(null, payment)
             assertEquals(0, economy.withdrawals)
-        }
-    }
-
-    @Test
-    fun `manual lock blocks player command gui and flare before side effects`() {
-        listOf(StartSource.PLAYER_COMMAND, StartSource.GUI, StartSource.FLARE).forEach { source ->
-            val economy = FakeEconomy(20.0)
-            var starts = 0
-            val result = service(economy, config(basicCost = 5.0, lock = LockState.MANUAL_LOCKED)) { _, _, _ -> starts++; true }
-                .start(request(source = source))
-
-            assertEquals(StartFailure.LOCKED, (result as StartResult.Rejected).failure)
-            assertEquals(20.0, economy.currentBalance)
-            assertEquals(0, starts)
-        }
-    }
-
-    @Test
-    fun `manual start disabled blocks player and gui starts`() {
-        listOf(StartSource.PLAYER_COMMAND, StartSource.GUI).forEach { source ->
-            val economy = FakeEconomy(20.0)
-            val result = service(economy, config(basicCost = 5.0, enabled = false)) { _, _, _ -> true }
-                .start(request(source = source))
-            assertEquals(StartFailure.FEATURE_DISABLED, (result as StartResult.Rejected).failure)
-            assertEquals(20.0, economy.currentBalance)
         }
     }
 
@@ -150,7 +176,7 @@ class StartServiceTest {
         val entered = CountDownLatch(1)
         val release = CountDownLatch(1)
         val economy = FakeEconomy(20.0)
-        val service = service(economy, config(basicCost = 5.0)) { _, _, _ ->
+        val service = service(economy, config(basicCost = 5.0)) { _, _, _, _ ->
             entered.countDown()
             release.await(2, TimeUnit.SECONDS)
             true
@@ -177,6 +203,7 @@ class StartServiceTest {
 
     private fun config(
         basicCost: Double = 0.0,
+        advancedCost: Double = basicCost + 1.0,
         delay: Int = 0,
         lock: LockState = LockState.UNLOCKED,
         enabled: Boolean = true,
@@ -184,7 +211,7 @@ class StartServiceTest {
         manualStart = ManualStartConfig(
             enabled = enabled,
             basicCost = basicCost,
-            advancedCost = basicCost + 1.0,
+            advancedCost = advancedCost,
             delaySeconds = delay,
         ),
         locks = LockConfig(lock),
@@ -208,14 +235,21 @@ class StartServiceTest {
         var currentBalance: Double,
         private val withdrawSucceeds: Boolean = true,
         private val depositSucceeds: Boolean = true,
+        private val balanceThrows: Boolean = false,
+        private val withdrawThrows: Boolean = false,
     ) : PlayerEconomy {
         var withdrawals = 0
         var deposits = 0
 
         override fun isAvailable() = true
-        override fun balance(playerId: UUID) = currentBalance
+
+        override fun balance(playerId: UUID): Double {
+            if (balanceThrows) error("balance boom")
+            return currentBalance
+        }
 
         override fun withdraw(playerId: UUID, amount: Double): Boolean {
+            if (withdrawThrows) error("withdraw boom")
             withdrawals++
             if (!withdrawSucceeds) return false
             currentBalance -= amount

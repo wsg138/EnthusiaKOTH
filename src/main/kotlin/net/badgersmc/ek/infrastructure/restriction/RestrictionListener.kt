@@ -1,8 +1,10 @@
 package net.badgersmc.ek.infrastructure.restriction
 
 import net.badgersmc.ek.application.KothService
+import net.badgersmc.ek.domain.KothEvent
 import net.badgersmc.ek.toComponent
 import org.bukkit.Material
+import org.bukkit.entity.AbstractArrow
 import org.bukkit.entity.AbstractWindCharge
 import org.bukkit.entity.EnderPearl
 import org.bukkit.entity.Firework
@@ -13,150 +15,255 @@ import org.bukkit.event.EventPriority
 import org.bukkit.event.Listener
 import org.bukkit.event.entity.EntityDamageByEntityEvent
 import org.bukkit.event.entity.EntityToggleGlideEvent
+import org.bukkit.event.entity.ExplosionPrimeEvent
 import org.bukkit.event.entity.ProjectileLaunchEvent
 import org.bukkit.event.player.PlayerInteractEvent
-import org.bukkit.projectiles.ProjectileSource
+import org.bukkit.event.player.PlayerMoveEvent
+import org.bukkit.event.player.PlayerTeleportEvent
+import org.bukkit.inventory.ItemStack
 
-/**
- * Bukkit event listener that enforces item-use restrictions during an active KOTH.
- *
- * Hooks into [KothService] to read the current [KothEvent] and applies
- * [RestrictionService] decisions. Denied actions are cancelled and the player
- * receives a coloured action-bar message.
- */
+/** Enforces event-scoped item, projectile, and movement restrictions. */
 class RestrictionListener(
     private val kothService: KothService,
     private val restrictions: RestrictionService,
 ) : Listener {
 
-    // ─────────────────────────────────────────────────────────
-    // Item interaction (ender pearl, wind charge, spear, mace use)
-    // ─────────────────────────────────────────────────────────
-
-    @EventHandler(ignoreCancelled = true)
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     fun onInteract(event: PlayerInteractEvent) {
-        val active = kothService.activeEvent ?: return
-        val player = event.player
-
-        if (!active.isParticipant(player.uniqueId)) return
-        if (!active.arena.zone.contains(player.location)) return
-
-        val decision = restrictions.canUseItem(player, active, event.item)
-        if (!decision.allowed) {
+        val active = relevantEvent(event.player) ?: return
+        if (!active.arena.zone.contains(event.player.location)) return
+        denyIfNeeded(event.player, restrictions.canUseItem(event.player, active, event.item)) {
             event.isCancelled = true
-            player.sendActionBar(decision.message.toComponent())
         }
     }
 
-    // ─────────────────────────────────────────────────────────
-    // Damage (melee: mace, spear; projectile)
-    // ─────────────────────────────────────────────────────────
-
-    @EventHandler(ignoreCancelled = true)
+    /** Deny damage using the launch-time projectile item rather than the shooter's current hand. */
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     fun onDamage(event: EntityDamageByEntityEvent) {
-        val player = damagingPlayer(event) ?: return
         val active = kothService.activeEvent ?: return
+        val attacker = damagingPlayer(event) ?: return
 
-        // Private test — prevent cross-participant damage
         if (active.isPrivateTest && event.entity is Player) {
             val victim = event.entity as Player
-            if (isInsideEventArea(active, player, victim)
-                && active.isParticipant(player.uniqueId) != active.isParticipant(victim.uniqueId)
+            if (isInsideEventArea(active, attacker, victim)
+                && active.isParticipant(attacker.uniqueId) != active.isParticipant(victim.uniqueId)
             ) {
                 event.isCancelled = true
                 return
             }
         }
 
-        if (!active.isParticipant(player.uniqueId)) return
-        if (!active.arena.zone.contains(player.location)) return
-
-        val decision = restrictions.canDealDamageWith(player, active, player.inventory.itemInMainHand)
-        if (!decision.allowed) {
+        if (!active.isParticipant(attacker.uniqueId)) return
+        val use = damageUse(event, active, attacker) ?: return
+        if (!use.appliesInsideZone) return
+        denyIfNeeded(attacker, damageDecision(attacker, active, use)) {
             event.isCancelled = true
-            player.sendActionBar(decision.message.toComponent())
-        } else if (decision.cooldownSeconds > 0) {
-            // Apply cooldown for mace or spear hits
-            val hand = player.inventory.itemInMainHand
-            val type = if (hand.type == Material.MACE) RestrictedItemType.MACE else RestrictedItemType.SPEAR
-            restrictions.applyCooldown(player, type)
         }
     }
 
-    // ─────────────────────────────────────────────────────────
-    // Elytra toggle
-    // ─────────────────────────────────────────────────────────
+    /** Apply hit cooldowns only after every other plugin has had a chance to cancel the damage. */
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    fun onAcceptedDamage(event: EntityDamageByEntityEvent) {
+        if (event.isCancelled) return
+        val active = kothService.activeEvent ?: return
+        val attacker = damagingPlayer(event) ?: return
+        if (!active.isParticipant(attacker.uniqueId)) return
+        val use = damageUse(event, active, attacker) ?: return
+        if (!use.appliesInsideZone) return
+        val decision = damageDecision(attacker, active, use)
+        val type = use.item?.type?.let(RestrictionService::typeFor) ?: return
+        val shouldCommit = type in DAMAGE_COOLDOWNS
+        if (decision.allowed && decision.cooldownSeconds > 0 && shouldCommit) {
+            restrictions.applyCooldown(attacker, active, type)
+        }
+    }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
     fun onGlide(event: EntityToggleGlideEvent) {
-        if (event.entity !is Player || !event.isGliding) return
+        if (event.isCancelled || event.entity !is Player || !event.isGliding) return
         val player = event.entity as Player
-        val active = kothService.activeEvent ?: return
+        val active = relevantEvent(player) ?: return
+        if (!active.arena.zone.contains(player.location)) return
+        denyIfNeeded(player, restrictions.canUseElytra(player, active)) {
+            event.isCancelled = true
+        }
+    }
 
-        if (!active.isParticipant(player.uniqueId)) return
+    /** Stops a player who was already gliding before crossing into the capture zone. */
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    fun onMove(event: PlayerMoveEvent) {
+        val to = event.to ?: return
+        val active = relevantEvent(event.player) ?: return
+        if (!event.player.isGliding) return
+        if (active.arena.zone.contains(event.from) || !active.arena.zone.contains(to)) return
+        val decision = restrictions.canUseElytra(event.player, active)
+        if (!decision.allowed) {
+            event.player.isGliding = false
+            event.player.sendActionBar(decision.message.toComponent())
+        }
+    }
+
+    /**
+     * Reject restricted launches inside the zone. This handler never writes cooldown state;
+     * accepted launch state is recorded at MONITOR after cancellation is final.
+     */
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    fun onProjectileRestriction(event: ProjectileLaunchEvent) {
+        if (event.isCancelled) return
+        val player = event.entity.shooter as? Player ?: return
+        val active = relevantEvent(player) ?: return
         if (!active.arena.zone.contains(player.location)) return
 
-        val decision = restrictions.canUseElytra(player, active)
-        if (!decision.allowed) {
+        val decision = when (event.entity) {
+            is Firework -> restrictions.canUseElytra(player, active)
+            is EnderPearl -> restrictions.canUseType(player, active, RestrictedItemType.ENDER_PEARL)
+            is AbstractWindCharge -> restrictions.canUseType(player, active, RestrictedItemType.WIND_CHARGE)
+            else -> restrictions.canUseItem(player, active, launchItem(event.entity))
+        }
+        denyIfNeeded(player, decision) { event.isCancelled = true }
+    }
+
+    /** Snapshot every accepted participant projectile, including launches outside the zone. */
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    fun onProjectileAccepted(event: ProjectileLaunchEvent) {
+        if (event.isCancelled) return
+        val player = event.entity.shooter as? Player ?: return
+        val active = relevantEvent(player) ?: return
+        val launchedInside = active.arena.zone.contains(player.location)
+        val item = launchItem(event.entity)
+        restrictions.recordProjectile(
+            active,
+            event.entity.uniqueId,
+            player,
+            item,
+            launchedInsideZone = launchedInside,
+        )
+
+        // Pearl cooldown begins only after a successful teleport, otherwise the pearl would
+        // see its own just-written cooldown and cancel itself. Wind charges commit at launch.
+        if (launchedInside && event.entity is AbstractWindCharge) {
+            val decision = restrictions.canUseType(player, active, RestrictedItemType.WIND_CHARGE)
+            if (decision.allowed && decision.cooldownSeconds > 0) {
+                restrictions.applyCooldown(player, active, RestrictedItemType.WIND_CHARGE)
+            }
+        }
+    }
+
+    /** Outside-launched wind charges are evaluated when their effect reaches the zone. */
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    fun onWindChargePrime(event: ExplosionPrimeEvent) {
+        if (event.entity !is AbstractWindCharge) return
+        val active = kothService.activeEvent ?: return
+        if (!active.arena.zone.contains(event.entity.location)) return
+        val snapshot = restrictions.projectileSnapshot(active, event.entity.uniqueId) ?: return
+        val player = org.bukkit.Bukkit.getPlayer(snapshot.shooterId) ?: return
+        val decision = if (snapshot.launchedInsideZone) {
+            restrictions.canUseTypeIgnoringCooldown(active, RestrictedItemType.WIND_CHARGE)
+        } else {
+            restrictions.canUseType(player, active, RestrictedItemType.WIND_CHARGE)
+        }
+        denyIfNeeded(player, decision) { event.isCancelled = true }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    fun onAcceptedWindChargePrime(event: ExplosionPrimeEvent) {
+        if (event.isCancelled || event.entity !is AbstractWindCharge) return
+        val active = kothService.activeEvent ?: return
+        if (!active.arena.zone.contains(event.entity.location)) return
+        val snapshot = restrictions.projectileSnapshot(active, event.entity.uniqueId) ?: return
+        if (snapshot.launchedInsideZone) return
+        val player = org.bukkit.Bukkit.getPlayer(snapshot.shooterId) ?: return
+        val decision = restrictions.canUseType(player, active, RestrictedItemType.WIND_CHARGE)
+        if (decision.allowed && decision.cooldownSeconds > 0) {
+            restrictions.applyCooldown(player, active, RestrictedItemType.WIND_CHARGE)
+        }
+    }
+
+    /** Outside-launched pearls cannot teleport a participant into a zone where pearls are denied. */
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    fun onPearlTeleport(event: PlayerTeleportEvent) {
+        if (event.cause != PlayerTeleportEvent.TeleportCause.ENDER_PEARL) return
+        val to = event.to ?: return
+        val active = relevantEvent(event.player) ?: return
+        if (!active.arena.zone.contains(to)) return
+        denyIfNeeded(event.player, restrictions.canUseType(event.player, active, RestrictedItemType.ENDER_PEARL)) {
             event.isCancelled = true
+        }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    fun onAcceptedPearlTeleport(event: PlayerTeleportEvent) {
+        if (event.isCancelled || event.cause != PlayerTeleportEvent.TeleportCause.ENDER_PEARL) return
+        val to = event.to ?: return
+        val active = relevantEvent(event.player) ?: return
+        if (!active.arena.zone.contains(to)) return
+        val decision = restrictions.canUseType(event.player, active, RestrictedItemType.ENDER_PEARL)
+        if (decision.allowed && decision.cooldownSeconds > 0) {
+            restrictions.applyCooldown(event.player, active, RestrictedItemType.ENDER_PEARL)
+        }
+    }
+
+    private fun relevantEvent(player: Player): KothEvent? =
+        kothService.activeEvent?.takeIf { it.isParticipant(player.uniqueId) }
+
+    private fun damageUse(event: EntityDamageByEntityEvent, active: KothEvent, attacker: Player): DamageUse? {
+        val victimInside = active.arena.zone.contains(event.entity.location)
+        return when (val damager = event.damager) {
+            is Player -> DamageUse(damager.inventory.itemInMainHand, active.arena.zone.contains(damager.location) || victimInside)
+            is Projectile -> {
+                val snapshot = restrictions.projectileSnapshot(active, damager.uniqueId) ?: return null
+                if (snapshot.shooterId != attacker.uniqueId) return null
+                DamageUse(
+                    item = snapshot.item,
+                    appliesInsideZone = victimInside || active.arena.zone.contains(damager.location),
+                )
+            }
+            else -> null
+        }
+    }
+
+    private fun launchItem(projectile: Projectile): ItemStack? {
+        when (projectile) {
+            is EnderPearl -> return ItemStack(Material.ENDER_PEARL)
+            is AbstractWindCharge -> return ItemStack(Material.WIND_CHARGE)
+        }
+        if (projectile is AbstractArrow) return projectile.weapon?.clone()
+        return null
+    }
+
+    private fun damagingPlayer(event: EntityDamageByEntityEvent): Player? = when (val damager = event.damager) {
+        is Player -> damager
+        is Projectile -> damager.shooter as? Player
+        else -> null
+    }
+
+    private fun isInsideEventArea(event: KothEvent, first: Player, second: Player): Boolean =
+        event.arena.zone.contains(first.location) || event.arena.zone.contains(second.location)
+
+    private inline fun denyIfNeeded(player: Player, decision: RestrictionDecision, deny: () -> Unit) {
+        if (!decision.allowed) {
+            deny()
             player.sendActionBar(decision.message.toComponent())
         }
     }
 
-    // ─────────────────────────────────────────────────────────
-    // Projectile launch (firework boost, ender pearl, wind charge)
-    // ─────────────────────────────────────────────────────────
-
-    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
-    fun onProjectileLaunch(event: ProjectileLaunchEvent) {
-        val source = event.entity.shooter
-        if (source !is Player) return
-        val player = source
-        val active = kothService.activeEvent ?: return
-
-        if (!active.isParticipant(player.uniqueId) || !active.arena.zone.contains(player.location)) return
-
-        when (event.entity) {
-            is Firework -> {
-                // Firework boosting — only allow if elytra is permitted
-                val decision = restrictions.canUseElytra(player, active)
-                if (!decision.allowed) {
-                    event.isCancelled = true
-                    player.sendActionBar(decision.message.toComponent())
-                }
-            }
-
-            is EnderPearl -> {
-                restrictions.applyCooldown(player, RestrictedItemType.ENDER_PEARL)
-            }
-
-            is AbstractWindCharge -> {
-                restrictions.applyCooldown(player, RestrictedItemType.WIND_CHARGE)
-            }
+    private fun damageDecision(player: Player, event: KothEvent, use: DamageUse): RestrictionDecision {
+        val type = use.item?.type?.let(RestrictionService::typeFor)
+        return if (type == RestrictedItemType.WIND_CHARGE) {
+            // Wind-charge cooldowns are committed after an accepted launch/prime. The same
+            // charge's later damage must not be rejected by the cooldown it just started.
+            restrictions.canUseTypeIgnoringCooldown(event, type)
+        } else {
+            restrictions.canDealDamageWith(player, event, use.item)
         }
     }
 
-    // ─────────────────────────────────────────────────────────
-    // Helpers
-    // ─────────────────────────────────────────────────────────
+    private data class DamageUse(
+        val item: ItemStack?,
+        val appliesInsideZone: Boolean,
+    )
 
-    private fun damagingPlayer(event: EntityDamageByEntityEvent): Player? {
-        when (val damager = event.damager) {
-            is Player -> return damager
-            is Projectile -> {
-                val shooter = damager.shooter
-                if (shooter is Player) return shooter
-            }
-        }
-        return null
-    }
-
-    private fun isInsideEventArea(
-        event: net.badgersmc.ek.domain.KothEvent,
-        first: Player,
-        second: Player,
-    ): Boolean {
-        return event.arena.zone.contains(first.location)
-            || event.arena.zone.contains(second.location)
+    companion object {
+        private val DAMAGE_COOLDOWNS = setOf(RestrictedItemType.MACE, RestrictedItemType.SPEAR)
     }
 }

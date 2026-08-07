@@ -3,6 +3,7 @@ package net.badgersmc.ek.di
 import com.zaxxer.hikari.HikariConfig
 import com.zaxxer.hikari.HikariDataSource
 import net.badgersmc.ek.EnthusiaKothPlugin
+import net.badgersmc.ek.application.CancellationReason
 import net.badgersmc.ek.application.DisplayService
 import net.badgersmc.ek.application.EventStarter
 import net.badgersmc.ek.application.FireworkCelebrationService
@@ -52,7 +53,7 @@ class ServiceModule(private val plugin: EnthusiaKothPlugin) {
     }
 
     fun reload() {
-        kothService.shutdown()
+        kothService.shutdown(CancellationReason.RELOAD)
         scheduleService.reload()
         restrictionService.clear()
         configLoader.reload()
@@ -103,16 +104,20 @@ class ServiceModule(private val plugin: EnthusiaKothPlugin) {
         lumaGuildsAdapter,
     )
     val zoneBorderService = ZoneBorderService(plugin)
-    val restrictionService = RestrictionService { arenaId ->
-        val family = arenas()[arenaId]?.family?.lowercase() ?: arenaId.lowercase()
-        config().rules.rules[family] ?: RuleSet.PERMISSIVE
-    }
+    val restrictionService = RestrictionService(
+        rulesForArena = { arenaId ->
+            val family = arenas()[arenaId]?.family?.lowercase() ?: arenaId.lowercase()
+            config().rules.rules[family] ?: RuleSet.PERMISSIVE
+        },
+    )
     val displayService = DisplayService(plugin, langService).also {
         plugin.server.pluginManager.registerEvents(it, plugin)
     }
+    val vaultEconomy = VaultEconomyAdapter(plugin)
     val kothService = KothService(
         cfgLoader = { config() },
         stats = statsRepository,
+        economy = vaultEconomy,
         guilds = lumaGuildsAdapter,
         displayService = displayService,
         fireworkService = fireworkService,
@@ -126,15 +131,15 @@ class ServiceModule(private val plugin: EnthusiaKothPlugin) {
             plugin.logger.severe(message)
             error?.let { plugin.logger.severe(it.stackTraceToString()) }
         },
+        eventTerminated = restrictionService::clearEvent,
     )
-    val vaultEconomy = VaultEconomyAdapter(plugin)
     val startService = StartService(
         config = { config() },
         pluginReady = { plugin.isEnabled },
         hasConflictingEvent = { kothService.activeEvent != null },
         economy = vaultEconomy,
-        starter = EventStarter { arena, kind, delay ->
-            kothService.startEvent(arena, kind = kind, delaySeconds = delay)
+        starter = EventStarter { arena, kind, delay, payment ->
+            kothService.startEvent(arena, kind = kind, delaySeconds = delay, paymentReceipt = payment)
         },
         logError = { message, error ->
             plugin.logger.severe(message)

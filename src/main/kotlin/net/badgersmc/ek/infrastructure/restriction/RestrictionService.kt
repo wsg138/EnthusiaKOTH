@@ -2,34 +2,26 @@ package net.badgersmc.ek.infrastructure.restriction
 
 import net.badgersmc.ek.domain.KothEvent
 import org.bukkit.Material
+import org.bukkit.enchantments.Enchantment
 import org.bukkit.entity.Player
 import org.bukkit.inventory.ItemStack
+import java.time.Clock
 import java.time.Duration
 import java.time.Instant
-import java.util.*
+import java.util.EnumMap
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 
-/**
- * Types of items that can be restricted per-arena.
- */
+/** Types of items that can be restricted per arena. */
 enum class RestrictedItemType {
     ELYTRA, MACE, SPEAR, ENDER_PEARL, WIND_CHARGE
 }
 
-/**
- * How the mace enchantments are restricted.
- * - FULLY_DISABLED:  mace damage is blocked entirely
- * - BREACH_DISABLED: base mace damage is allowed, Breach enchant is blocked (enforced elsewhere)
- * - DENSITY_DISABLED: base mace damage is allowed, Density enchant is blocked (enforced elsewhere)
- * - FULLY_ALLOWED:   mace is unrestricted (still subject to per-item cooldown)
- */
+/** Per-arena mace policy. */
 enum class MaceRule {
     FULLY_DISABLED, BREACH_DISABLED, DENSITY_DISABLED, FULLY_ALLOWED
 }
 
-/**
- * Per-arena rule set for restricted items.
- * Matches the structure of config.yml [rules.defaults.<family>].
- */
 data class RuleSet(
     val elytraAllowed: Boolean = true,
     val maceRule: MaceRule = MaceRule.FULLY_ALLOWED,
@@ -46,9 +38,6 @@ data class RuleSet(
     }
 }
 
-/**
- * Result of a restriction check.
- */
 data class RestrictionDecision(
     val allowed: Boolean,
     val message: String,
@@ -60,113 +49,131 @@ data class RestrictionDecision(
     }
 }
 
+/** Immutable launch-time classification used when a projectile later enters an arena. */
+data class ProjectileUseSnapshot(
+    val eventId: UUID,
+    val projectileId: UUID,
+    val shooterId: UUID,
+    val item: ItemStack?,
+    val launchedInsideZone: Boolean,
+)
+
 /**
- * Evaluates item-use restrictions and tracks per-player per-item cooldowns
- * for an active KOTH event.
+ * Evaluates restrictions and owns all event-scoped transient state.
  *
- * @param rulesForArena resolves a [RuleSet] for the given arena id (typically from config)
+ * Cooldowns and projectile launch snapshots are keyed by event id. A later event can therefore
+ * never inherit state even if a lifecycle callback is missed, while [clearEvent] still releases
+ * references immediately on every normal termination path.
  */
 class RestrictionService(
     private val rulesForArena: (arenaId: String) -> RuleSet,
+    private val clock: Clock = Clock.systemUTC(),
 ) {
-    private val cooldowns: MutableMap<UUID, MutableMap<RestrictedItemType, Instant>> = mutableMapOf()
+    private data class EventState(
+        val cooldowns: MutableMap<UUID, MutableMap<RestrictedItemType, Instant>> = ConcurrentHashMap(),
+        val projectiles: MutableMap<UUID, ProjectileUseSnapshot> = ConcurrentHashMap(),
+    )
 
-    // ─────────────────────────────────────────────────────────
-    // Public API
-    // ─────────────────────────────────────────────────────────
+    private val states = ConcurrentHashMap<UUID, EventState>()
 
-    /**
-     * Check whether the player's held item is usable inside the event zone.
-     * Covers direct-use items: ender pearl, wind charge, and (via the listener) spears / maces
-     * when interacted with.
-     */
     fun canUseItem(player: Player, event: KothEvent, item: ItemStack?): RestrictionDecision {
-        if (item == null) return RestrictionDecision.allowed()
-        val type = typeFor(item.type) ?: return RestrictionDecision.allowed()
+        val type = item?.type?.let(::typeFor) ?: return RestrictionDecision.allowed()
         return decision(player, event, type)
     }
 
-    /**
-     * Check whether the player may deal damage with the held item (melee / projectile).
-     * Applies mace-rule logic and spear restrictions.
-     */
+    fun canUseType(player: Player, event: KothEvent, type: RestrictedItemType): RestrictionDecision =
+        decision(player, event, type)
+
+    fun canUseTypeIgnoringCooldown(event: KothEvent, type: RestrictedItemType): RestrictionDecision {
+        val rules = rulesForArena(event.arena.id)
+        return if (enabled(rules, type)) {
+            RestrictionDecision.allowed(cooldownFor(rules, type))
+        } else {
+            RestrictionDecision.denied("${type.name.lowercase().replace('_', ' ')} is disabled for this KOTH.")
+        }
+    }
+
     fun canDealDamageWith(player: Player, event: KothEvent, item: ItemStack?): RestrictionDecision {
         if (item == null) return RestrictionDecision.allowed()
         val rules = rulesForArena(event.arena.id)
         return when (item.type) {
             Material.MACE -> when (rules.maceRule) {
                 MaceRule.FULLY_DISABLED -> RestrictionDecision.denied("Mace damage is disabled for this KOTH.")
-                // Base mace damage allowed, but the specific enchant is blocked —
-                // enforce it here (the cooldown path alone only gates frequency).
-                MaceRule.BREACH_DISABLED -> {
-                    if (item.containsEnchantment(org.bukkit.enchantments.Enchantment.BREACH)) {
-                        RestrictionDecision.denied("The Breach enchantment is disabled for this KOTH.")
-                    } else {
-                        decision(player, event, RestrictedItemType.MACE)
-                    }
+                MaceRule.BREACH_DISABLED -> if (item.containsEnchantment(Enchantment.BREACH)) {
+                    RestrictionDecision.denied("The Breach enchantment is disabled for this KOTH.")
+                } else {
+                    decision(player, event, RestrictedItemType.MACE)
                 }
-                MaceRule.DENSITY_DISABLED -> {
-                    if (item.containsEnchantment(org.bukkit.enchantments.Enchantment.DENSITY)) {
-                        RestrictionDecision.denied("The Density enchantment is disabled for this KOTH.")
-                    } else {
-                        decision(player, event, RestrictedItemType.MACE)
-                    }
+                MaceRule.DENSITY_DISABLED -> if (item.containsEnchantment(Enchantment.DENSITY)) {
+                    RestrictionDecision.denied("The Density enchantment is disabled for this KOTH.")
+                } else {
+                    decision(player, event, RestrictedItemType.MACE)
                 }
                 MaceRule.FULLY_ALLOWED -> decision(player, event, RestrictedItemType.MACE)
             }
-
-            else -> {
-                if (item.type in SPEARS) {
-                    decision(player, event, RestrictedItemType.SPEAR)
-                } else {
-                    RestrictionDecision.allowed()
-                }
+            else -> if (item.type in SPEARS) {
+                decision(player, event, RestrictedItemType.SPEAR)
+            } else {
+                RestrictionDecision.allowed()
             }
         }
     }
 
-    /**
-     * Check whether the player may glide with an elytra.
-     */
     fun canUseElytra(player: Player, event: KothEvent): RestrictionDecision =
         decision(player, event, RestrictedItemType.ELYTRA)
 
-    /**
-     * Record that a cooldown was triggered for the given item type.
-     */
-    fun applyCooldown(player: Player, type: RestrictedItemType) {
-        cooldowns
-            .computeIfAbsent(player.uniqueId) { EnumMap(RestrictedItemType::class.java) }
-            .put(type, Instant.now())
+    fun applyCooldown(player: Player, event: KothEvent, type: RestrictedItemType) {
+        states.computeIfAbsent(event.id) { EventState() }
+            .cooldowns
+            .computeIfAbsent(player.uniqueId) { EnumMap(RestrictedItemType::class.java) }[type] = clock.instant()
     }
 
-    /**
-     * Clear all cooldowns (called on event end).
-     */
+    fun recordProjectile(
+        event: KothEvent,
+        projectileId: UUID,
+        player: Player,
+        item: ItemStack?,
+        launchedInsideZone: Boolean = false,
+    ) {
+        val snapshot = ProjectileUseSnapshot(
+            eventId = event.id,
+            projectileId = projectileId,
+            shooterId = player.uniqueId,
+            item = item?.clone(),
+            launchedInsideZone = launchedInsideZone,
+        )
+        states.computeIfAbsent(event.id) { EventState() }.projectiles[projectileId] = snapshot
+    }
+
+    fun projectileSnapshot(event: KothEvent, projectileId: UUID): ProjectileUseSnapshot? =
+        states[event.id]?.projectiles?.get(projectileId)?.takeIf { it.eventId == event.id }
+
+    fun removeProjectile(eventId: UUID, projectileId: UUID) {
+        states[eventId]?.projectiles?.remove(projectileId)
+    }
+
+    fun clearEvent(eventId: UUID) {
+        states.remove(eventId)
+    }
+
     fun clear() {
-        cooldowns.clear()
+        states.clear()
     }
 
-    // ─────────────────────────────────────────────────────────
-    // Internal
-    // ─────────────────────────────────────────────────────────
+    internal fun trackedProjectileCount(eventId: UUID): Int = states[eventId]?.projectiles?.size ?: 0
 
     private fun decision(player: Player, event: KothEvent, type: RestrictedItemType): RestrictionDecision {
         val rules = rulesForArena(event.arena.id)
         val cooldownSeconds = cooldownFor(rules, type)
-
         if (!enabled(rules, type)) {
-            return RestrictionDecision.denied(
-                "${type.name.lowercase().replace('_', ' ')} is disabled for this KOTH."
-            )
+            return RestrictionDecision.denied("${type.name.lowercase().replace('_', ' ')} is disabled for this KOTH.")
         }
-
-        val remaining = remainingCooldown(player, type, cooldownSeconds)
-        if (remaining > 0) {
-            return RestrictionDecision.denied("Still on cooldown for ${remaining}s.")
+        val remaining = remainingCooldown(player, event, type, cooldownSeconds)
+        return if (remaining > 0) {
+            RestrictionDecision.denied("Still on cooldown for ${remaining}s.")
+        } else {
+            RestrictionDecision.allowed(cooldownSeconds)
         }
-
-        return RestrictionDecision.allowed(cooldownSeconds)
     }
 
     private fun enabled(rules: RuleSet, type: RestrictedItemType): Boolean = when (type) {
@@ -185,32 +192,30 @@ class RestrictionService(
         RestrictedItemType.ELYTRA -> 0
     }
 
-    private fun remainingCooldown(player: Player, type: RestrictedItemType, cooldownSeconds: Int): Int {
+    private fun remainingCooldown(
+        player: Player,
+        event: KothEvent,
+        type: RestrictedItemType,
+        cooldownSeconds: Int,
+    ): Int {
         if (cooldownSeconds <= 0) return 0
-        val last = cooldowns[player.uniqueId]?.get(type) ?: return 0
-        val elapsed = Duration.between(last, Instant.now()).seconds
+        val last = states[event.id]?.cooldowns?.get(player.uniqueId)?.get(type) ?: return 0
+        val elapsed = Duration.between(last, clock.instant()).seconds
         return (cooldownSeconds - elapsed).coerceAtLeast(0).toInt()
     }
 
     companion object {
-        /**
-         * Spear materials resolved by name at runtime — the constants aren't part of
-         * the vanilla Paper Material enum, so referencing them statically would break
-         * compilation against artifacts that lack them. Unknown materials are skipped.
-         */
         private val SPEARS: Set<Material> = listOf(
             "WOODEN_SPEAR", "STONE_SPEAR", "COPPER_SPEAR", "IRON_SPEAR",
-            "GOLDEN_SPEAR", "DIAMOND_SPEAR", "NETHERITE_SPEAR",
-        ).mapNotNull { runCatching { Material.getMaterial(it) }.getOrNull() }.toSet()
+            "GOLDEN_SPEAR", "DIAMOND_SPEAR", "NETHERITE_SPEAR", "SPEAR",
+        ).mapNotNull { Material.getMaterial(it) }.toSet()
 
-        private val typeFor: (Material) -> RestrictedItemType? = { material ->
-            when (material) {
-                Material.ELYTRA -> RestrictedItemType.ELYTRA
-                Material.MACE -> RestrictedItemType.MACE
-                Material.ENDER_PEARL -> RestrictedItemType.ENDER_PEARL
-                Material.WIND_CHARGE -> RestrictedItemType.WIND_CHARGE
-                else -> if (material in SPEARS) RestrictedItemType.SPEAR else null
-            }
+        fun typeFor(material: Material): RestrictedItemType? = when (material) {
+            Material.ELYTRA -> RestrictedItemType.ELYTRA
+            Material.MACE -> RestrictedItemType.MACE
+            Material.ENDER_PEARL -> RestrictedItemType.ENDER_PEARL
+            Material.WIND_CHARGE -> RestrictedItemType.WIND_CHARGE
+            else -> if (material in SPEARS) RestrictedItemType.SPEAR else null
         }
     }
 }

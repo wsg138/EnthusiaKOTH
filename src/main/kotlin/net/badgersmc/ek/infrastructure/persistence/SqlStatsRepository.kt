@@ -21,9 +21,6 @@ class SqlStatsRepository(
     private val familyCache = ConcurrentHashMap<FamilyKey, Int>()
     private val totalCache = ConcurrentHashMap<String, Int>()
     private val nameCache = ConcurrentHashMap<String, String>()
-    private val fallbackFamilies = ConcurrentHashMap<FamilyKey, Int>()
-    private val fallbackTotals = ConcurrentHashMap<String, Int>()
-    private val fallbackNames = ConcurrentHashMap<String, String>()
     private val writer = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "EnthusiaKOTH-StatsWriter").apply { isDaemon = true }
     }
@@ -52,25 +49,19 @@ class SqlStatsRepository(
         totalCache.merge(entityKey, 1, Int::plus)
     }
 
-    fun totalWins(entityKey: String): Int = maxOf(totalCache[entityKey] ?: 0, fallbackTotals[entityKey] ?: 0)
+    fun totalWins(entityKey: String): Int = totalCache[entityKey] ?: 0
 
-    fun familyWins(entityKey: String, family: String): Int = maxOf(
-        familyCache[FamilyKey(entityKey, family.lowercase())] ?: 0,
-        fallbackFamilies[FamilyKey(entityKey, family.lowercase())] ?: 0,
-    )
+    fun familyWins(entityKey: String, family: String): Int =
+        familyCache[FamilyKey(entityKey, family.lowercase())] ?: 0
 
     fun kothWins(entityKey: String, kothName: String): Int {
         val exact = arenaCache[ArenaKey(entityKey, kothName.lowercase())] ?: 0
         return if (exact > 0) exact else familyWins(entityKey, familyResolver(kothName))
     }
 
-    fun displayName(entityKey: String): String? = nameCache[entityKey] ?: fallbackNames[entityKey]
+    fun displayName(entityKey: String): String? = nameCache[entityKey]
 
-    fun allWins(): Map<String, Int> {
-        val merged = HashMap(totalCache)
-        fallbackTotals.forEach { (key, value) -> merged.merge(key, value, ::maxOf) }
-        return merged
-    }
+    fun allWins(): Map<String, Int> = HashMap(totalCache)
 
     fun maxPages(pageSize: Int = 10): Int = (allWins().size + pageSize - 1) / pageSize
 
@@ -144,13 +135,16 @@ class SqlStatsRepository(
 
     private fun installFallback(records: List<LegacyStatsRecord>) {
         records.forEach { record ->
-            fallbackTotals.merge(record.entityKey, record.totalWins, ::maxOf)
-            fallbackNames.putIfAbsent(record.entityKey, record.displayName)
+            // Merge the legacy baseline into the writable caches. New runtime wins then
+            // increment on top of that baseline and the next successful save persists
+            // the combined value, so a later migration cannot erase post-failure wins.
+            totalCache.merge(record.entityKey, record.totalWins, ::maxOf)
+            nameCache.putIfAbsent(record.entityKey, record.displayName)
             record.familyWins.forEach { (family, wins) ->
-                fallbackFamilies.merge(FamilyKey(record.entityKey, family.lowercase()), wins, ::maxOf)
+                familyCache.merge(FamilyKey(record.entityKey, family.lowercase()), wins, ::maxOf)
             }
         }
-        logger("Using in-memory legacy statistics fallback because SQLite migration did not complete", null)
+        logger("Using writable legacy statistics fallback because SQLite migration did not complete", null)
     }
 
     private fun ensureSchema(connection: Connection) {
@@ -173,13 +167,22 @@ class SqlStatsRepository(
     }
 
     private fun backfillTotals(connection: Connection) {
+        val totals = linkedMapOf<String, Int>()
+        val families = linkedMapOf<FamilyKey, Int>()
         connection.createStatement().use { statement ->
-            statement.executeQuery("SELECT entity_key, SUM(wins) FROM koth_stats GROUP BY entity_key").use { result ->
+            statement.executeQuery("SELECT entity_key, koth_name, wins FROM koth_stats").use { result ->
                 while (result.next()) {
-                    upsertTotalMaximum(connection, result.getString(1), result.getInt(2))
+                    val entityKey = result.getString(1)
+                    val arena = result.getString(2)
+                    val wins = result.getInt(3)
+                    totals.merge(entityKey, wins, Int::plus)
+                    val family = familyResolver(arena).lowercase()
+                    families.merge(FamilyKey(entityKey, family), wins, Int::plus)
                 }
             }
         }
+        totals.forEach { (entityKey, wins) -> upsertTotalMaximum(connection, entityKey, wins) }
+        families.forEach { (key, wins) -> upsertFamilyMaximum(connection, key, wins) }
     }
 
     private fun upsertArena(connection: Connection, key: ArenaKey, wins: Int) {
@@ -210,6 +213,17 @@ class SqlStatsRepository(
         ).use { statement ->
             statement.setString(1, entityKey)
             statement.setInt(2, wins)
+            statement.executeUpdate()
+        }
+    }
+
+    private fun upsertFamilyMaximum(connection: Connection, key: FamilyKey, wins: Int) {
+        connection.prepareStatement(
+            "INSERT INTO koth_family_stats(entity_key, family, wins) VALUES(?, ?, ?) ON CONFLICT(entity_key, family) DO UPDATE SET wins = MAX(koth_family_stats.wins, excluded.wins)",
+        ).use { statement ->
+            statement.setString(1, key.entityKey)
+            statement.setString(2, key.family)
+            statement.setInt(3, wins)
             statement.executeUpdate()
         }
     }

@@ -131,8 +131,10 @@ class LegacyStatsMigrationTest {
         assertEquals(20, repository.totalWins("solo:11111111-1111-1111-1111-111111111111"))
         assertEquals(10, repository.familyWins("solo:11111111-1111-1111-1111-111111111111", "capture"))
         val outcome = assertInstanceOf(LegacyMigrationOutcome.Success::class.java, repository.migrationOutcome)
-        assertEquals(0, outcome.report.playerRecordsImported)
-        assertEquals(1, outcome.report.skipped)
+        // Filling a previously missing display name is an imported record even when
+        // newer SQLite numeric totals remain authoritative.
+        assertEquals(1, outcome.report.playerRecordsImported)
+        assertEquals(0, outcome.report.skipped)
         repository.shutdown()
     }
 
@@ -177,6 +179,60 @@ class LegacyStatsMigrationTest {
             }
         }
         assertTrue(File(file.parentFile, "stats.yml.pre-sqlite-backup").isFile)
+        repository.shutdown()
+    }
+
+    @Test
+    fun `post-failure wins are additive and survive later migration`() {
+        val file = fixture("players-only.yml")
+        val source = dataSource()
+        val key = "solo:11111111-1111-1111-1111-111111111111"
+        val failed = SqlStatsRepository(
+            dataSource = source,
+            familyResolver = { "capture" },
+            legacyStatsFile = file,
+            migrationBeforeCommit = { error("injected failure") },
+        )
+        failed.init()
+        assertEquals(5, failed.totalWins(key))
+
+        failed.incrementWin(key, "capture-arena")
+        assertEquals(6, failed.totalWins(key))
+        assertEquals(4, failed.familyWins(key, "capture"))
+        failed.shutdown()
+
+        val restarted = SqlStatsRepository(
+            dataSource = source,
+            familyResolver = { "capture" },
+            legacyStatsFile = file,
+        )
+        restarted.init()
+        assertEquals(6, restarted.totalWins(key))
+        assertEquals(4, restarted.familyWins(key, "capture"))
+        restarted.shutdown()
+    }
+
+    @Test
+    fun `existing arena rows backfill family aggregates`() {
+        val source = dataSource()
+        val key = "solo:33333333-3333-3333-3333-333333333333"
+        SqlStatsRepository(source).also { it.init(); it.shutdown() }
+        source.connection.use { connection ->
+            connection.prepareStatement("INSERT INTO koth_stats(entity_key, koth_name, wins) VALUES(?, ?, ?)").use { statement ->
+                listOf("capture-one" to 2, "capture-two" to 3).forEach { (arena, wins) ->
+                    statement.setString(1, key)
+                    statement.setString(2, arena)
+                    statement.setInt(3, wins)
+                    statement.addBatch()
+                }
+                statement.executeBatch()
+            }
+        }
+
+        val repository = SqlStatsRepository(source, familyResolver = { "capture" })
+        repository.init()
+        assertEquals(5, repository.totalWins(key))
+        assertEquals(5, repository.familyWins(key, "capture"))
         repository.shutdown()
     }
 

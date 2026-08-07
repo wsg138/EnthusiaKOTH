@@ -1,5 +1,6 @@
 package net.badgersmc.ek.infrastructure.bukkit
 
+import net.badgersmc.ek.application.CancellationReason
 import net.badgersmc.ek.application.FlareService
 import net.badgersmc.ek.application.KothService
 import net.badgersmc.ek.application.ScheduleService
@@ -147,6 +148,10 @@ class KothCommand(
 
     private fun schedule(sender: CommandSender) {
         val cfg = cfgLoader()
+        if (!cfg.schedule.enabled) {
+            sender.sendMessage(lang.msg("command.error.schedule_disabled"))
+            return
+        }
         val now = ZonedDateTime.now(cfg.schedule.zone)
         sender.sendMessage(lang.msg("command.schedule.header"))
         sender.sendMessage(lang.msg("command.schedule.time_now", "time" to now.format(DateTimeFormatter.ofPattern("HH:mm"))))
@@ -392,17 +397,17 @@ class KothCommand(
             return
         }
         if (!event.isOwner(player.uniqueId)) {
-            player.sendMessage(lang.msg("private.error.is_owner"))
+            player.sendMessage(lang.msg("private.error.not_owner"))
             return
         }
-        kothService.forceEnd()
+        kothService.forceEnd(CancellationReason.PRIVATE_OWNER, announce = false)
         player.sendMessage(lang.msg("private.success.cancelled"))
     }
 
     fun handleGuiClick(player: Player, slot: Int, holder: KothGuiHolder) {
         val arenaId = holder.arenaIds.getOrNull(slot) ?: return
         val arena = arenas()[arenaId] ?: return
-        val result = startService.start(StartRequest(startActor(player), arena, StartSource.GUI))
+        val result = startService.start(StartRequest(startActor(player), arena, StartSource.GUI, StartTier.BASIC))
         if (result is StartResult.Started) player.closeInventory()
         sendStartResult(player, arenaId, result, true)
     }

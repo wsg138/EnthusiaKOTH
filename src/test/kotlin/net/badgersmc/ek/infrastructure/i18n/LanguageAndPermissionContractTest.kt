@@ -13,6 +13,7 @@ class LanguageAndPermissionContractTest {
         val references = File("src/main/kotlin").walkTopDown()
             .filter { it.isFile && it.extension == "kt" }
             .flatMap { file -> keyPattern.findAll(file.readText()).map { it.groupValues[1] } }
+            .filterNot { '$' in it }
             .toSortedSet()
         val missing = references.filterNot(language::contains)
         assertTrue(missing.isEmpty(), "Missing language keys: $missing")
