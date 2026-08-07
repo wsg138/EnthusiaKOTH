@@ -1,126 +1,328 @@
 package net.badgersmc.ek.infrastructure.persistence
 
+import java.io.File
 import java.sql.Connection
-import java.sql.ResultSet
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import javax.sql.DataSource
 
-/**
- * SQLite-backed stats storage for KOTH wins.
- * Uses HikariCP via javax.sql.DataSource.
- *
- * In-memory cache is updated synchronously (callers on the main thread get
- * immediate read-your-writes), while the actual SQLite upserts run on a
- * single-threaded executor so disk I/O never blocks the game tick.
- */
 class SqlStatsRepository(
     private val dataSource: DataSource,
+    private val familyResolver: (String) -> String = { it },
+    private val legacyStatsFile: File? = null,
+    private val logger: (String, Throwable?) -> Unit = { _, _ -> },
+    private val migrationBeforeCommit: () -> Unit = {},
 ) {
-    private val cache = ConcurrentHashMap<String, MutableMap<String, Int>>()
-    private val ioExecutor: ExecutorService = Executors.newSingleThreadExecutor { r ->
-        Thread(r, "EnthusiaKOTH-Stats-Writer").apply { isDaemon = true }
+    private data class ArenaKey(val entityKey: String, val arena: String)
+    private data class FamilyKey(val entityKey: String, val family: String)
+
+    private val arenaCache = ConcurrentHashMap<ArenaKey, Int>()
+    private val familyCache = ConcurrentHashMap<FamilyKey, Int>()
+    private val legacyFamilyBaselineCache = ConcurrentHashMap<FamilyKey, Int>()
+    private val legacyArenaOffsetCache = ConcurrentHashMap<ArenaKey, Int>()
+    private val totalCache = ConcurrentHashMap<String, Int>()
+    private val nameCache = ConcurrentHashMap<String, String>()
+    private val writer = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "EnthusiaKOTH-StatsWriter").apply { isDaemon = true }
     }
+
+    @Volatile
+    var migrationOutcome: LegacyMigrationOutcome = LegacyMigrationOutcome.NotNeeded
+        private set
 
     fun init() {
-        dataSource.connection.use { conn ->
-            conn.createStatement().use { st ->
-                st.executeUpdate(
-                    """
-                    CREATE TABLE IF NOT EXISTS koth_wins (
-                        player_key TEXT NOT NULL,
-                        koth_name  TEXT NOT NULL DEFAULT '__total__',
-                        wins       INTEGER NOT NULL DEFAULT 0,
-                        PRIMARY KEY (player_key, koth_name)
-                    )
-                    """.trimIndent()
-                )
-            }
+        dataSource.connection.use { connection ->
+            ensureSchema(connection)
+            backfillTotals(connection)
         }
-        loadCache()
+        migrationOutcome = legacyStatsFile?.let { file ->
+            LegacyStatsMigrator(dataSource, logger, migrationBeforeCommit).migrate(file)
+        } ?: LegacyMigrationOutcome.NotNeeded
+        legacyStatsFile?.takeIf(File::isFile)?.let(::ensureLegacyPlaceholderBaselines)
+        loadCaches()
+        val failure = migrationOutcome as? LegacyMigrationOutcome.Failed
+        if (failure != null) installFallback(failure.fallbackRecords)
     }
 
-    private fun loadCache() {
-        cache.clear()
-        dataSource.connection.use { conn ->
-            conn.createStatement().use { st ->
-                st.executeQuery("SELECT player_key, koth_name, wins FROM koth_wins").use { rs ->
-                    while (rs.next()) {
-                        val key = rs.getString("player_key")
-                        val koth = rs.getString("koth_name")
-                        val wins = rs.getInt("wins")
-                        cache.computeIfAbsent(key) { ConcurrentHashMap() }[koth] = wins
+    fun incrementWin(entityKey: String, kothName: String) {
+        val family = familyResolver(kothName).lowercase()
+        arenaCache.merge(ArenaKey(entityKey, kothName.lowercase()), 1, Int::plus)
+        familyCache.merge(FamilyKey(entityKey, family), 1, Int::plus)
+        totalCache.merge(entityKey, 1, Int::plus)
+    }
+
+    fun totalWins(entityKey: String): Int = totalCache[entityKey] ?: 0
+
+    fun familyWins(entityKey: String, family: String): Int =
+        familyCache[FamilyKey(entityKey, family.lowercase())] ?: 0
+
+    fun kothWins(entityKey: String, kothName: String): Int {
+        val arenaKey = ArenaKey(entityKey, kothName.lowercase())
+        val exact = arenaCache[arenaKey] ?: 0
+        val familyKey = FamilyKey(entityKey, familyResolver(kothName).lowercase())
+        val legacyBaseline = legacyFamilyBaselineCache[familyKey]
+            ?: return if (exact > 0) exact else familyWins(entityKey, familyResolver(kothName))
+        val exactAtMigration = legacyArenaOffsetCache[arenaKey] ?: 0
+        return maxOf(legacyBaseline, exactAtMigration) + (exact - exactAtMigration).coerceAtLeast(0)
+    }
+
+    fun displayName(entityKey: String): String? = nameCache[entityKey]
+
+    fun allWins(): Map<String, Int> = HashMap(totalCache)
+
+    fun maxPages(pageSize: Int = 10): Int = (allWins().size + pageSize - 1) / pageSize
+
+    fun save() {
+        val arenas = HashMap(arenaCache)
+        val families = HashMap(familyCache)
+        val totals = HashMap(totalCache)
+        val names = HashMap(nameCache)
+        writer.submit {
+            runCatching {
+                dataSource.connection.use { connection ->
+                    connection.autoCommit = false
+                    try {
+                        arenas.forEach { (key, wins) -> upsertArena(connection, key, wins) }
+                        families.forEach { (key, wins) -> upsertFamily(connection, key, wins) }
+                        totals.forEach { (entity, wins) -> upsertTotal(connection, entity, wins) }
+                        names.forEach { (entity, name) -> upsertName(connection, entity, name) }
+                        connection.commit()
+                    } catch (error: Throwable) {
+                        connection.rollback()
+                        throw error
+                    } finally {
+                        connection.autoCommit = true
                     }
+                }
+            }.onFailure { logger("Failed to persist KOTH statistics snapshot", it) }
+        }
+    }
+
+    fun shutdown() {
+        save()
+        writer.shutdown()
+        try {
+            if (!writer.awaitTermination(10, TimeUnit.SECONDS)) {
+                logger("KOTH statistics writer did not flush within 10 seconds; forcing shutdown", null)
+                writer.shutdownNow()
+            }
+        } catch (interrupted: InterruptedException) {
+            Thread.currentThread().interrupt()
+            writer.shutdownNow()
+            logger("Interrupted while flushing KOTH statistics", interrupted)
+        }
+    }
+
+    private fun loadCaches() {
+        arenaCache.clear()
+        familyCache.clear()
+        legacyFamilyBaselineCache.clear()
+        legacyArenaOffsetCache.clear()
+        totalCache.clear()
+        nameCache.clear()
+        dataSource.connection.use { connection ->
+            connection.createStatement().use { statement ->
+                statement.executeQuery("SELECT entity_key, koth_name, wins FROM koth_stats").use { result ->
+                    while (result.next()) {
+                        arenaCache[ArenaKey(result.getString(1), result.getString(2).lowercase())] = result.getInt(3)
+                    }
+                }
+                statement.executeQuery("SELECT entity_key, family, wins FROM koth_family_stats").use { result ->
+                    while (result.next()) {
+                        familyCache[FamilyKey(result.getString(1), result.getString(2).lowercase())] = result.getInt(3)
+                    }
+                }
+                statement.executeQuery("SELECT entity_key, family, wins FROM koth_legacy_family_baselines").use { result ->
+                    while (result.next()) {
+                        legacyFamilyBaselineCache[FamilyKey(result.getString(1), result.getString(2).lowercase())] = result.getInt(3)
+                    }
+                }
+                statement.executeQuery("SELECT entity_key, koth_name, wins FROM koth_legacy_arena_offsets").use { result ->
+                    while (result.next()) {
+                        legacyArenaOffsetCache[ArenaKey(result.getString(1), result.getString(2).lowercase())] = result.getInt(3)
+                    }
+                }
+                statement.executeQuery("SELECT entity_key, wins FROM koth_totals").use { result ->
+                    while (result.next()) totalCache[result.getString(1)] = result.getInt(2)
+                }
+                statement.executeQuery("SELECT entity_key, display_name FROM koth_entity_names").use { result ->
+                    while (result.next()) nameCache[result.getString(1)] = result.getString(2)
                 }
             }
         }
     }
 
-    fun totalWins(playerKey: String): Int =
-        cache[playerKey]?.get("__total__") ?: 0
-
-    fun kothWins(playerKey: String, kothName: String): Int =
-        cache[playerKey]?.get(kothName) ?: 0
-
-    fun incrementWin(playerKey: String, kothName: String) {
-        cache.computeIfAbsent(playerKey) { ConcurrentHashMap() }.also { map ->
-            map.merge("__total__", 1, Int::plus)
-            map.merge(kothName, 1, Int::plus)
+    private fun installFallback(records: List<LegacyStatsRecord>) {
+        records.forEach { record ->
+            // Merge the legacy baseline into the writable caches. New runtime wins then
+            // increment on top of that baseline and the next successful save persists
+            // the combined value, so a later migration cannot erase post-failure wins.
+            totalCache.merge(record.entityKey, record.totalWins, ::maxOf)
+            nameCache.putIfAbsent(record.entityKey, record.displayName)
+            record.familyWins.forEach { (family, wins) ->
+                familyCache.merge(FamilyKey(record.entityKey, family.lowercase()), wins, ::maxOf)
+            }
         }
-        // Write to DB asynchronously (single-threaded, preserves ordering per key)
-        ioExecutor.execute {
-            upsert(playerKey, "__total__", totalWins(playerKey))
-            upsert(playerKey, kothName, kothWins(playerKey, kothName))
-        }
+        logger("Using writable legacy statistics fallback because SQLite migration did not complete", null)
     }
 
-    private fun upsert(playerKey: String, kothName: String, wins: Int) {
-        dataSource.connection.use { conn ->
-            conn.prepareStatement(
+    private fun ensureSchema(connection: Connection) {
+        connection.createStatement().use { statement ->
+            statement.executeUpdate(
                 """
-                INSERT INTO koth_wins (player_key, koth_name, wins) VALUES (?, ?, ?)
-                ON CONFLICT(player_key, koth_name) DO UPDATE SET wins = ?
-                """.trimIndent()
-            ).use { stmt ->
-                stmt.setString(1, playerKey)
-                stmt.setString(2, kothName)
-                stmt.setInt(3, wins)
-                stmt.setInt(4, wins)
-                stmt.executeUpdate()
+                CREATE TABLE IF NOT EXISTS koth_stats (
+                    entity_key TEXT NOT NULL,
+                    koth_name TEXT NOT NULL,
+                    wins INTEGER NOT NULL,
+                    PRIMARY KEY (entity_key, koth_name)
+                )
+                """.trimIndent(),
+            )
+            statement.executeUpdate("CREATE TABLE IF NOT EXISTS koth_family_stats (entity_key TEXT NOT NULL, family TEXT NOT NULL, wins INTEGER NOT NULL, PRIMARY KEY(entity_key, family))")
+            statement.executeUpdate("CREATE TABLE IF NOT EXISTS koth_totals (entity_key TEXT PRIMARY KEY, wins INTEGER NOT NULL)")
+            statement.executeUpdate("CREATE TABLE IF NOT EXISTS koth_entity_names (entity_key TEXT PRIMARY KEY, display_name TEXT NOT NULL, updated_at INTEGER NOT NULL)")
+            statement.executeUpdate("CREATE TABLE IF NOT EXISTS koth_migrations (id TEXT PRIMARY KEY, checksum TEXT NOT NULL, completed_at INTEGER NOT NULL)")
+            statement.executeUpdate("CREATE TABLE IF NOT EXISTS koth_legacy_family_baselines (entity_key TEXT NOT NULL, family TEXT NOT NULL, wins INTEGER NOT NULL, PRIMARY KEY(entity_key, family))")
+            statement.executeUpdate("CREATE TABLE IF NOT EXISTS koth_legacy_arena_offsets (entity_key TEXT NOT NULL, koth_name TEXT NOT NULL, wins INTEGER NOT NULL, PRIMARY KEY(entity_key, koth_name))")
+        }
+    }
+
+    private fun ensureLegacyPlaceholderBaselines(file: File) {
+        val records = LegacyStatsMigrator(dataSource, logger).parse(file).records
+        dataSource.connection.use { connection ->
+            val alreadySnapshotted = connection.createStatement().use { statement ->
+                statement.executeQuery("SELECT COUNT(*) FROM koth_legacy_family_baselines").use { result ->
+                    result.next() && result.getInt(1) > 0
+                }
+            }
+            if (alreadySnapshotted) return
+            connection.autoCommit = false
+            try {
+                records.forEach { record ->
+                    record.familyWins.forEach { (familyName, wins) ->
+                        val family = familyName.lowercase()
+                        connection.prepareStatement(
+                            "INSERT INTO koth_legacy_family_baselines(entity_key, family, wins) VALUES(?, ?, ?) " +
+                                "ON CONFLICT(entity_key, family) DO UPDATE SET wins = MAX(koth_legacy_family_baselines.wins, excluded.wins)",
+                        ).use { statement ->
+                            statement.setString(1, record.entityKey)
+                            statement.setString(2, family)
+                            statement.setInt(3, wins)
+                            statement.executeUpdate()
+                        }
+
+                        connection.prepareStatement(
+                            "SELECT koth_name, wins FROM koth_stats WHERE entity_key = ?",
+                        ).use { statement ->
+                            statement.setString(1, record.entityKey)
+                            statement.executeQuery().use { result ->
+                                while (result.next()) {
+                                    val arena = result.getString(1)
+                                    if (!familyResolver(arena).equals(family, ignoreCase = true)) continue
+                                    connection.prepareStatement(
+                                        "INSERT OR IGNORE INTO koth_legacy_arena_offsets(entity_key, koth_name, wins) VALUES(?, ?, ?)",
+                                    ).use { insert ->
+                                        insert.setString(1, record.entityKey)
+                                        insert.setString(2, arena.lowercase())
+                                        insert.setInt(3, result.getInt(2))
+                                        insert.executeUpdate()
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                connection.commit()
+            } catch (error: Throwable) {
+                connection.rollback()
+                logger("Failed to persist legacy KOTH placeholder baselines", error)
+            } finally {
+                connection.autoCommit = true
             }
         }
     }
 
-    fun topWins(limit: Int = 10): List<Pair<String, Int>> =
-        cache.entries
-            .mapNotNull { (key, map) -> map["__total__"]?.let { key to it } }
-            .sortedByDescending { it.second }
-            .take(limit)
-
-    fun allWins(): Map<String, Int> =
-        cache.entries.associate { (key, map) -> key to (map["__total__"] ?: 0) }
-
-    fun maxPages(): Int = ((cache.size + 9) / 10).coerceAtLeast(1)
-
-    fun save() {
-        // Already written on each increment — cache is just a read-through
+    private fun backfillTotals(connection: Connection) {
+        val totals = linkedMapOf<String, Int>()
+        val families = linkedMapOf<FamilyKey, Int>()
+        connection.createStatement().use { statement ->
+            statement.executeQuery("SELECT entity_key, koth_name, wins FROM koth_stats").use { result ->
+                while (result.next()) {
+                    val entityKey = result.getString(1)
+                    val arena = result.getString(2)
+                    val wins = result.getInt(3)
+                    totals.merge(entityKey, wins, Int::plus)
+                    val family = familyResolver(arena).lowercase()
+                    families.merge(FamilyKey(entityKey, family), wins, Int::plus)
+                }
+            }
+        }
+        totals.forEach { (entityKey, wins) -> upsertTotalMaximum(connection, entityKey, wins) }
+        families.forEach { (key, wins) -> upsertFamilyMaximum(connection, key, wins) }
     }
 
-    /**
-     * Flushes pending writes and shuts down the writer thread (call on plugin disable).
-     * Waits for queued upserts to complete so no writes are lost when HikariCP closes.
-     */
-    fun shutdown() {
-        ioExecutor.shutdown()
-        try {
-            if (!ioExecutor.awaitTermination(10, TimeUnit.SECONDS)) {
-                ioExecutor.shutdownNow()
-            }
-        } catch (e: InterruptedException) {
-            ioExecutor.shutdownNow()
-            Thread.currentThread().interrupt()
+    private fun upsertArena(connection: Connection, key: ArenaKey, wins: Int) {
+        connection.prepareStatement(
+            "INSERT INTO koth_stats(entity_key, koth_name, wins) VALUES(?, ?, ?) ON CONFLICT(entity_key, koth_name) DO UPDATE SET wins = excluded.wins",
+        ).use { statement ->
+            statement.setString(1, key.entityKey)
+            statement.setString(2, key.arena)
+            statement.setInt(3, wins)
+            statement.executeUpdate()
+        }
+    }
+
+    private fun upsertFamily(connection: Connection, key: FamilyKey, wins: Int) {
+        connection.prepareStatement(
+            "INSERT INTO koth_family_stats(entity_key, family, wins) VALUES(?, ?, ?) ON CONFLICT(entity_key, family) DO UPDATE SET wins = excluded.wins",
+        ).use { statement ->
+            statement.setString(1, key.entityKey)
+            statement.setString(2, key.family)
+            statement.setInt(3, wins)
+            statement.executeUpdate()
+        }
+    }
+
+    private fun upsertTotal(connection: Connection, entityKey: String, wins: Int) {
+        connection.prepareStatement(
+            "INSERT INTO koth_totals(entity_key, wins) VALUES(?, ?) ON CONFLICT(entity_key) DO UPDATE SET wins = excluded.wins",
+        ).use { statement ->
+            statement.setString(1, entityKey)
+            statement.setInt(2, wins)
+            statement.executeUpdate()
+        }
+    }
+
+    private fun upsertFamilyMaximum(connection: Connection, key: FamilyKey, wins: Int) {
+        connection.prepareStatement(
+            "INSERT INTO koth_family_stats(entity_key, family, wins) VALUES(?, ?, ?) ON CONFLICT(entity_key, family) DO UPDATE SET wins = MAX(koth_family_stats.wins, excluded.wins)",
+        ).use { statement ->
+            statement.setString(1, key.entityKey)
+            statement.setString(2, key.family)
+            statement.setInt(3, wins)
+            statement.executeUpdate()
+        }
+    }
+
+    private fun upsertTotalMaximum(connection: Connection, entityKey: String, wins: Int) {
+        connection.prepareStatement(
+            "INSERT INTO koth_totals(entity_key, wins) VALUES(?, ?) ON CONFLICT(entity_key) DO UPDATE SET wins = MAX(koth_totals.wins, excluded.wins)",
+        ).use { statement ->
+            statement.setString(1, entityKey)
+            statement.setInt(2, wins)
+            statement.executeUpdate()
+        }
+    }
+
+    private fun upsertName(connection: Connection, entityKey: String, name: String) {
+        connection.prepareStatement(
+            "INSERT INTO koth_entity_names(entity_key, display_name, updated_at) VALUES(?, ?, ?) ON CONFLICT(entity_key) DO UPDATE SET display_name = excluded.display_name, updated_at = excluded.updated_at",
+        ).use { statement ->
+            statement.setString(1, entityKey)
+            statement.setString(2, name)
+            statement.setLong(3, System.currentTimeMillis())
+            statement.executeUpdate()
         }
     }
 }

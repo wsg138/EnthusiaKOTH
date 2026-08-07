@@ -19,6 +19,7 @@ data class CaptureZone(
     val maxY: Double get() = maxOf(corner1.y, corner2.y)
     val minZ: Double get() = minOf(corner1.z, corner2.z)
     val maxZ: Double get() = maxOf(corner1.z, corner2.z)
+    val objectiveY: Double get() = (minY + maxY) / 2.0
     val radiusSq: Double get() = radius * radius
 
     fun contains(loc: Location): Boolean {

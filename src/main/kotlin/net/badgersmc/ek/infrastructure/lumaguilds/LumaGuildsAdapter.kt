@@ -67,15 +67,17 @@ class LumaGuildsAdapter {
 
     fun depositToVault(guildId: UUID, amount: Double, reason: String): Boolean {
         val lk = lookup ?: return false
+        if (!amount.isFinite() || amount <= 0.0 || amount > Long.MAX_VALUE.toDouble()) return false
         val units = amount.toLong()
-        if (units <= 0) return false
+        if (units.toDouble() != amount) return false
         return lk.bankDeposit(guildId, guildId, units, reason)
     }
 
     fun withdrawFromVault(guildId: UUID, amount: Double, reason: String): Boolean {
         val lk = lookup ?: return false
+        if (!amount.isFinite() || amount <= 0.0 || amount > Long.MAX_VALUE.toDouble()) return false
         val units = amount.toLong()
-        if (units <= 0) return false
+        if (units.toDouble() != amount) return false
         return lk.bankWithdraw(guildId, guildId, units, reason)
     }
 

@@ -1,24 +1,33 @@
 package net.badgersmc.ek.domain
 
+import net.badgersmc.ek.application.PaymentReceipt
 import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
-/**
- * An active KOTH event with state machine and score tracking.
- */
+enum class PrivateTestAccess { OWNER_ONLY, PERMISSION_JOIN }
+
+enum class PrivateJoinResult {
+    JOINED,
+    NOT_PRIVATE,
+    EXPIRED,
+    OWNER,
+    OWNER_ONLY,
+    ALREADY_JOINED,
+}
+
 data class KothEvent(
     val id: UUID,
     val arena: KothArena,
     val startsAt: Instant,
     val endsAt: Instant,
     @Volatile var state: EventState = EventState.STARTING,
-    val owner: UUID? = null, // non-null = private test
+    val owner: UUID? = null,
     val isPrivateTest: Boolean = false,
     val lobbySeconds: Int = 0,
-    // Paid-start bookkeeping: guild charged for a manual start, refunded on stop
-    val paidByGuild: UUID? = null,
-    val paidCost: Double = 0.0,
+    val paymentReceipt: PaymentReceipt? = null,
+    val teamMode: TeamMode = TeamMode.SOLO,
+    val privateTestAccess: PrivateTestAccess? = null,
 ) {
     val scores: MutableMap<TeamId, Double> = ConcurrentHashMap()
     val participants: MutableSet<UUID> = ConcurrentHashMap.newKeySet()
@@ -32,6 +41,19 @@ data class KothEvent(
     fun join(playerId: UUID): Boolean = participants.add(playerId)
     fun leave(playerId: UUID): Boolean = participants.remove(playerId)
     fun isOwner(playerId: UUID): Boolean = owner == playerId
+
+    fun joinPrivate(playerId: UUID): PrivateJoinResult {
+        if (!isPrivateTest) return PrivateJoinResult.NOT_PRIVATE
+        if (state !in setOf(EventState.STARTING, EventState.ACTIVE)) return PrivateJoinResult.EXPIRED
+        if (isOwner(playerId)) return PrivateJoinResult.OWNER
+        if (privateTestAccess != PrivateTestAccess.PERMISSION_JOIN) return PrivateJoinResult.OWNER_ONLY
+        return if (join(playerId)) PrivateJoinResult.JOINED else PrivateJoinResult.ALREADY_JOINED
+    }
+
+    fun resolveTeam(playerId: UUID, guildId: UUID?): TeamId? {
+        if (teamMode == TeamMode.SOLO || arena.ignoreFactions) return TeamId(TeamMode.SOLO, playerId)
+        return guildId?.let { TeamId(TeamMode.GUILD, it) }
+    }
 
     fun clearScores() { scores.clear() }
     fun addScore(team: TeamId, amount: Double) { scores.merge(team, amount, Double::plus) }

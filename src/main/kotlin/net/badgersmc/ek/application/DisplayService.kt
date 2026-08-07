@@ -1,62 +1,66 @@
 package net.badgersmc.ek.application
 
-import net.badgersmc.ek.toComponent
 import net.kyori.adventure.bossbar.BossBar
 import org.bukkit.Bukkit
+import org.bukkit.entity.Player
 import org.bukkit.event.EventHandler
 import org.bukkit.event.Listener
 import org.bukkit.event.player.PlayerJoinEvent
 import org.bukkit.plugin.java.JavaPlugin
+import java.util.UUID
 
-/**
- * Display service: bossbar for active KOTH.
- */
 class DisplayService(
     private val plugin: JavaPlugin,
     private val lang: net.badgersmc.nexus.i18n.LangService,
 ) : Listener {
-
     private var bossBar: BossBar? = null
+    private var viewers: Set<UUID> = emptySet()
+    private var publicAudience = false
 
-    /** Show or update a bossbar for the active KOTH */
-    fun showKoth(kothName: String, capper: String?, timeLeft: String, contested: Boolean) {
+    fun showKoth(
+        kothName: String,
+        capper: String?,
+        timeLeft: String,
+        contested: Boolean,
+        progress: Float,
+        audience: Collection<Player>,
+        isPublic: Boolean,
+    ) {
         val text = if (capper != null) {
-            lang.msg("bossbar.format_with_capper",
+            lang.msg(
+                "bossbar.format_with_capper",
                 "koth_name" to kothName,
                 "capper" to capper,
-                "contested" to (if (contested) lang.msg("bossbar.contested") else net.kyori.adventure.text.Component.empty()),
+                "contested" to if (contested) lang.msg("bossbar.contested") else net.kyori.adventure.text.Component.empty(),
                 "time" to timeLeft,
             )
         } else {
-            lang.msg("bossbar.format_no_capper",
-                "koth_name" to kothName,
-                "time" to timeLeft,
-            )
+            lang.msg("bossbar.format_no_capper", "koth_name" to kothName, "time" to timeLeft)
         }
-        val bar = bossBar ?: BossBar.bossBar(
-            text,
-            1.0f,
-            BossBar.Color.RED,
-            BossBar.Overlay.PROGRESS,
-        ).also { b ->
-            Bukkit.getOnlinePlayers().forEach { b.addViewer(it) }
-            bossBar = b
+        val safeProgress = progress.coerceIn(0.0f, 1.0f)
+        val bar = bossBar ?: BossBar.bossBar(text, safeProgress, BossBar.Color.RED, BossBar.Overlay.PROGRESS).also {
+            bossBar = it
         }
         bar.name(text)
+        bar.progress(safeProgress)
+        val desired = audience.mapTo(mutableSetOf()) { it.uniqueId }
+        Bukkit.getOnlinePlayers().forEach { player ->
+            if (player.uniqueId in desired) bar.addViewer(player) else bar.removeViewer(player)
+        }
+        viewers = desired
+        publicAudience = isPublic
     }
 
-    /** Players who join mid-KOTH should also see the bossbar. */
     @EventHandler(ignoreCancelled = true)
     fun onJoin(event: PlayerJoinEvent) {
-        // addViewer is idempotent — safe to call unconditionally when a bar exists
-        bossBar?.addViewer(event.player)
+        if (publicAudience || event.player.uniqueId in viewers) bossBar?.addViewer(event.player)
     }
 
     fun clear() {
-        bossBar?.let { bar ->
-            Bukkit.getOnlinePlayers().forEach { bar.removeViewer(it) }
-        }
+        bossBar?.let { bar -> Bukkit.getOnlinePlayers().forEach(bar::removeViewer) }
         bossBar = null
+        viewers = emptySet()
+        publicAudience = false
     }
 
     fun updateActive(eventId: String?) {

@@ -76,8 +76,8 @@ class FireworkCelebrationService(private val plugin: JavaPlugin) {
 
     private fun zoneCorners(zone: CaptureZone, defaultLoc: Location): List<Location> {
         val world = plugin.server.getWorld(zone.worldName) ?: return cornersFrom(defaultLoc)
-        val (minY, maxY) = zone.verticalBounds()
-        val launchY = minY.coerceAtLeast(world.minHeight.toDouble()) + 3.0
+        val launchY = (zone.objectiveY + 3.0)
+            .coerceIn(world.minHeight.toDouble(), (world.maxHeight - 1).toDouble())
 
         return listOf(
             Location(world, zone.minX, launchY, zone.minZ),

@@ -2,53 +2,81 @@ package net.badgersmc.ek.application
 
 import net.badgersmc.ek.config.EnthusiaKothConfig
 import net.badgersmc.ek.config.ProgressBarConfig
-import net.badgersmc.ek.config.ReminderConfig
-import net.badgersmc.ek.domain.*
+import net.badgersmc.ek.domain.CaptureLeaveBehavior
+import net.badgersmc.ek.domain.CaptureZone
+import net.badgersmc.ek.domain.EventKind
+import net.badgersmc.ek.domain.EventState
+import net.badgersmc.ek.domain.KothArena
+import net.badgersmc.ek.domain.KothEvent
+import net.badgersmc.ek.domain.PrivateTestAccess
+import net.badgersmc.ek.domain.TeamId
+import net.badgersmc.ek.domain.TeamMode
 import net.badgersmc.ek.infrastructure.discord.DiscordWebhookService
 import net.badgersmc.ek.infrastructure.display.ZoneBorderService
 import net.badgersmc.ek.infrastructure.lumaguilds.LumaGuildsAdapter
+import net.badgersmc.ek.infrastructure.persistence.EventQueueStore
+import net.badgersmc.ek.infrastructure.persistence.ScheduleClaimStatus
+import net.badgersmc.ek.infrastructure.persistence.ScheduleStateStore
 import net.badgersmc.ek.infrastructure.persistence.SqlStatsRepository
-import net.badgersmc.ek.toComponent
 import org.bukkit.Bukkit
 import org.bukkit.GameMode
-import org.bukkit.Location
 import org.bukkit.entity.Player
+import java.time.Clock
+import java.time.Duration
 import java.time.Instant
-import java.util.*
+import java.util.UUID
 import java.util.concurrent.ThreadLocalRandom
 import kotlin.math.min
-import kotlin.math.sqrt
 
-/**
- * A KOTH event queued to start when the current event finishes.
- */
+enum class QueuedEventState { READY, ACTIVATING, COMPLETED }
+
 data class QueuedEvent(
-    val arena: KothArena,
+    val arenaId: String,
     val startSource: EventKind,
     val scheduledAt: Instant,
+    val attempts: Int = 0,
+    val nextAttemptAt: Instant = scheduledAt,
+    val teamMode: TeamMode = TeamMode.SOLO,
+    val state: QueuedEventState = QueuedEventState.READY,
+    val occurrenceId: String? = null,
+    val activationId: UUID? = null,
 )
 
-/**
- * Core KOTH game loop. Runs every second (20 ticks).
- * Inspired by FactionsKore's KothFeature#runKoth() tick logic.
- */
+internal data class CaptureControlStep(
+    val left: TeamId? = null,
+    val entered: TeamId? = null,
+    val progressCurrent: Boolean = false,
+)
+
+enum class CancellationReason {
+    ADMINISTRATIVE,
+    PRIVATE_OWNER,
+    RELOAD,
+    PLUGIN_DISABLE,
+    STARTUP_DELAY_CANCELLED,
+    ACTIVATION_FAILURE,
+}
+
 class KothService(
     private val cfgLoader: () -> EnthusiaKothConfig,
     private val stats: SqlStatsRepository,
+    private val economy: PlayerEconomy,
     private val guilds: LumaGuildsAdapter,
     private val displayService: DisplayService,
+    private val objectiveMarkerService: ObjectiveMarkerService = ObjectiveMarkerService(),
     private val fireworkService: FireworkCelebrationService,
     private val discordWebhook: DiscordWebhookService,
     private val zoneBorderService: ZoneBorderService,
     private val lang: net.badgersmc.nexus.i18n.LangService,
+    private val arenaResolver: (String) -> KothArena?,
+    private val queueStore: EventQueueStore,
+    private val clock: Clock,
+    private val logger: (String, Throwable?) -> Unit,
+    private val eventTerminated: (UUID) -> Unit = {},
 ) {
     companion object {
-        /**
-         * Calculate the moving capture point along a square path.
-         * The point travels the perimeter of a square of side `squareSize`
-         * centered on (centerX, centerZ), at `speedBlocksPerSecond`.
-         * Pure function — no Bukkit access — unit tested.
-         */
+        private const val QUEUE_RETRY_SECONDS = 10L
+
         internal fun movingPointAt(
             elapsedSeconds: Double,
             squareSize: Double,
@@ -60,603 +88,880 @@ class KothService(
             val half = size / 2.0
             val perimeter = size * 4.0
             val distance = (elapsedSeconds.coerceAtLeast(0.0) * speedBlocksPerSecond) % perimeter
-
-            // Four edges of the square path, starting at the top-left corner:
-            // top (left→right), right (top→bottom), bottom (right→left), left (bottom→top)
             return when {
                 distance < size -> (centerX - half + distance) to (centerZ - half)
-                distance < size * 2.0 -> (centerX + half) to (centerZ - half + (distance - size))
+                distance < size * 2.0 -> (centerX + half) to (centerZ - half + distance - size)
                 distance < size * 3.0 -> (centerX + half - (distance - size * 2.0)) to (centerZ + half)
                 else -> (centerX - half) to (centerZ + half - (distance - size * 3.0))
             }
+        }
+
+        internal fun displayProgress(event: KothEvent, now: Instant): Float {
+            if (event.arena.family.equals("conquest", ignoreCase = true) ||
+                event.arena.family.equals("moving", ignoreCase = true)
+            ) {
+                val duration = event.arena.durationSeconds.coerceAtLeast(1).toDouble()
+                val remaining = Duration.between(now, event.endsAt).seconds.coerceAtLeast(0).toDouble()
+                return (remaining / duration).coerceIn(0.0, 1.0).toFloat()
+            }
+            val controller = event.currentController ?: return 0.0f
+            val target = event.arena.captureSeconds.coerceAtLeast(1).toDouble()
+            return ((event.scores[controller] ?: 0.0) / target).coerceIn(0.0, 1.0).toFloat()
+        }
+
+        internal fun applyMovingScore(event: KothEvent, teamsInZone: List<TeamId>) {
+            val controller = teamsInZone.singleOrNull()
+            event.currentController = controller
+            event.leaveAnnouncedFor = null
+            if (controller != null) event.addScore(controller, 1.0)
+        }
+
+        internal fun isMovingCaptureEligible(
+            zone: CaptureZone,
+            playerX: Double,
+            playerY: Double,
+            playerZ: Double,
+            objectiveX: Double,
+            objectiveZ: Double,
+        ): Boolean {
+            if (playerY !in zone.minY..zone.maxY) return false
+            val dx = playerX - objectiveX
+            val dz = playerZ - objectiveZ
+            return dx * dx + dz * dz <= zone.radiusSq
+        }
+
+        internal fun supportsPrivateTesting(arena: KothArena): Boolean =
+            !arena.family.equals("conquest", ignoreCase = true)
+
+        internal fun applyCaptureControl(event: KothEvent, teamsInZone: List<TeamId>): CaptureControlStep {
+            val arena = event.arena
+            val previous = event.currentController
+            if (previous != null) {
+                val contested = arena.contestWhenMultipleCappers && teamsInZone.size > 1
+                if (previous in teamsInZone && !contested) {
+                    return CaptureControlStep(progressCurrent = true)
+                }
+
+                when (arena.leaveBehavior) {
+                    CaptureLeaveBehavior.RESET -> event.scores.remove(previous)
+                    CaptureLeaveBehavior.DECAY -> {
+                        val next = ((event.scores[previous] ?: 0.0) - arena.decayPerSecond).coerceAtLeast(0.0)
+                        if (next <= 0.0) event.scores.remove(previous) else event.scores[previous] = next
+                    }
+                    CaptureLeaveBehavior.PAUSE -> Unit
+                }
+                event.currentController = null
+            }
+
+            val entered = teamsInZone.singleOrNull()
+            if (entered != null) event.currentController = entered
+            return CaptureControlStep(left = previous, entered = entered)
         }
     }
 
     @Volatile var activeEvent: KothEvent? = null
     private val reminderCounters = mutableMapOf<String, Int>()
-    private val eventQueue = mutableListOf<QueuedEvent>()
+    private val eventQueue = queueStore.load().toMutableList()
+    private var queueDirty = false
+    private var suppressNextQueueProcess = false
     private var discordLastUpdate: Long? = null
+    @Volatile var lastCancellationRefundPending: Boolean = false
+        private set
 
     fun tick() {
-        val event = activeEvent ?: return
-        val now = Instant.now()
+        if (queueDirty) persistQueue()
+        val event = activeEvent
+        if (event == null) {
+            processQueue()
+            return
+        }
+        val now = clock.instant()
         val cfg = cfgLoader()
-
         when (event.state) {
-            EventState.STARTING -> {
-                if (!now.isBefore(event.startsAt)) {
-                    event.state = EventState.ACTIVE
-                    val beginMsg = lang.msg("koth.begin", "koth_name" to event.arena.id, "location" to locString(event.arena.zone))
-                    Bukkit.broadcast(beginMsg)
+            EventState.STARTING -> if (!now.isBefore(event.startsAt)) {
+                try {
+                    activateEvent(event, cfg)
+                } catch (error: Throwable) {
+                    logger("KOTH '${event.arena.id}' failed during delayed activation", error)
+                    cancelEvent(event, CancellationReason.ACTIVATION_FAILURE, announce = false)
                 }
             }
-            EventState.ACTIVE -> {
-                tickActive(event, cfg)
+            EventState.ACTIVE -> tickActive(event, cfg)
+            else -> Unit
+        }
+    }
+
+    private fun activateEvent(event: KothEvent, cfg: EnthusiaKothConfig) {
+        event.state = EventState.ACTIVE
+        discordLastUpdate = null
+        sendEventMessage(
+            event,
+            lang.msg("koth.begin", "koth_name" to event.arena.id, "location" to locString(event.arena.zone)),
+        )
+        if (!event.isPrivateTest) {
+            discordWebhook.sendStart(event.arena.id, locString(event.arena.zone))
+            if (cfg.display.zoneBorder) zoneBorderService.show(event.arena.zone)
+        }
+    }
+
+    private fun activateQueuedEvent(event: KothEvent, cfg: EnthusiaKothConfig, recovered: Boolean) {
+        event.state = EventState.ACTIVE
+        discordLastUpdate = null
+        runActivationStep(event, if (recovered) "recovery start announcement" else "start announcement") {
+            sendEventMessage(
+                event,
+                lang.msg("koth.begin", "koth_name" to event.arena.id, "location" to locString(event.arena.zone)),
+            )
+        }
+        if (!recovered && !event.isPrivateTest) {
+            runActivationStep(event, "Discord start notification") {
+                discordWebhook.sendStart(event.arena.id, locString(event.arena.zone))
             }
-            else -> {}
+        } else if (recovered) {
+            logger(
+                "Recovering durable KOTH activation ${event.id} for '${event.arena.id}' with a player-visible recovery announcement; " +
+                    "Discord start delivery is not replayed",
+                null,
+            )
+        }
+        if (!event.isPrivateTest && cfg.display.zoneBorder) {
+            runActivationStep(event, "zone border display") { zoneBorderService.show(event.arena.zone) }
+        }
+    }
+
+    private inline fun runActivationStep(event: KothEvent, label: String, block: () -> Unit) {
+        runCatching(block).onFailure { error ->
+            logger("KOTH '${event.arena.id}' $label failed during durable activation; the event remains active", error)
         }
     }
 
     private fun tickActive(event: KothEvent, cfg: EnthusiaKothConfig) {
         val arena = event.arena
-        val now = Instant.now()
-
-        // Timeout check
+        val now = clock.instant()
         if (!now.isBefore(event.endsAt)) {
-            finishEvent(event, cfg, resolveWinner(event))
+            finishEvent(event, resolveWinner(event))
             return
         }
+        val playersInZone = if (arena.family.equals("moving", true)) playersNearMovingPoint(event) else playersInCuboid(event)
 
-        // Get players in zone (CAPTURE/CONQUEST) or near moving point (MOVING)
-        val playersInZone = when (arena.family.lowercase()) {
-            "moving" -> playersNearMovingPoint(event)
-            else -> playersInCuboid(event)
-        }
-
-        // Empty zone early-end for CAPTURE family
-        if (arena.family.lowercase() == "capture" && playersInZone.isEmpty()
-            && !event.scores.keys.any { (event.scores[it] ?: 0.0) > 0 }) {
-            if (event.currentController == null && !now.isBefore(event.endsAt)) {
-                finishEvent(event, cfg, resolveWinner(event))
-                return
-            }
-        }
-
-        // Progress bar for players in zone
         if (cfg.progressBar.enabled && event.currentController != null) {
             val progress = progressBar(event, cfg.progressBar)
-            playersInZone.forEach { p ->
-                p.sendActionBar(progress)
-            }
+            playersInZone.forEach { it.sendActionBar(progress) }
         }
 
-        // Reminder
-        val rem = cfg.reminders
-        if (rem.enabled) {
-            val counter = reminderCounters.getOrPut(event.arena.id) { rem.intervalSeconds }
+        val reminder = cfg.reminders
+        if (reminder.enabled) {
+            val counter = reminderCounters.getOrPut(event.arena.id) { reminder.intervalSeconds }
             if (counter <= 0) {
-                reminderCounters[event.arena.id] = rem.intervalSeconds
-                val capper = capperName(event)
-                val reminder = lang.msg("koth.reminder", "koth_name" to event.arena.id, "capper" to (capper ?: "None"), "time_left" to formatTime(event.endsAt.epochSecond - now.epochSecond))
-                Bukkit.broadcast(reminder)
-            } else {
-                reminderCounters[event.arena.id] = counter - 1
-            }
+                reminderCounters[event.arena.id] = reminder.intervalSeconds
+                sendEventMessage(
+                    event,
+                    lang.msg(
+                        "koth.reminder",
+                        "koth_name" to event.arena.id,
+                        "capper" to (capperName(event) ?: "None"),
+                        "time_left" to formatTime(event.endsAt.epochSecond - now.epochSecond),
+                    ),
+                )
+            } else reminderCounters[event.arena.id] = counter - 1
         }
 
-        // Resolve teams
-        val teamsInZone = resolveTeams(playersInZone, arena)
-
-        // Family-specific capture logic
-        when (arena.family.lowercase()) {
-            "conquest" -> tickConquest(event, arena, teamsInZone)
-            else -> tickCaptureFamily(event, arena, cfg, teamsInZone)
+        val teamsInZone = resolveTeams(playersInZone, event)
+        when {
+            arena.family.equals("moving", true) -> applyMovingScore(event, teamsInZone)
+            arena.family.equals("conquest", true) -> tickConquest(event, arena, teamsInZone, playersInZone)
+            else -> tickCaptureFamily(event, arena, teamsInZone)
         }
 
-        // Bossbar display
-        val capperName = capperName(event)
-        val timeLeft = formatTime(event.endsAt.epochSecond - now.epochSecond)
         val contested = teamsInZone.size > 1
-        displayService.showKoth(arena.id, capperName, timeLeft, contested)
+        val timeLeft = formatTime(event.endsAt.epochSecond - now.epochSecond)
+        val recipients = eventRecipients(event)
+        objectiveMarkerService.show(
+            event,
+            recipients,
+            showStaticObjective = event.isPrivateTest && cfg.privateTesting.showObjectiveParticles,
+        )
+        displayService.showKoth(
+            arena.id,
+            capperName(event),
+            timeLeft,
+            contested,
+            displayProgress(event, now),
+            recipients,
+            !event.isPrivateTest,
+        )
 
-        // Discord live update
-        if (cfg.discord.enabled && cfg.discord.liveUpdateSeconds > 0) {
-            val lastUpdate = discordLastUpdate
-            val interval = cfg.discord.liveUpdateSeconds
-            if (lastUpdate == null || (now.epochSecond - lastUpdate) >= interval) {
+        if (!event.isPrivateTest && cfg.discord.enabled && cfg.discord.liveUpdateSeconds > 0) {
+            val last = discordLastUpdate
+            if (last == null || now.epochSecond - last >= cfg.discord.liveUpdateSeconds) {
                 discordLastUpdate = now.epochSecond
-                val capper = event.currentController
-                val contested = teamsInZone.size > 1
-                val timeLeft = formatTime(event.endsAt.epochSecond - now.epochSecond)
-                discordWebhook.sendLiveUpdate(event.arena.id, capper, contested, timeLeft)
+                discordWebhook.sendLiveUpdate(event.arena.id, event.currentController, contested, timeLeft)
             }
         }
     }
 
-    /** CAPTURE / MOVING family tick — single controller, capture threshold */
-    private fun tickCaptureFamily(event: KothEvent, arena: KothArena, cfg: EnthusiaKothConfig, teamsInZone: List<TeamId>) {
-        if (event.currentController == null) {
-            if (teamsInZone.size == 1) {
-                val team = teamsInZone.first()
-                event.currentController = team
-                val name = teamName(team)
-                val entered = lang.msg("koth.enter", "entered" to name, "koth_name" to arena.id, "captime" to formatTime(arena.captureSeconds.toLong()))
-                Bukkit.broadcast(entered)
-            }
-        } else {
-            val controller = event.currentController!!
-            if (controller !in teamsInZone) {
-                performLeave(event, cfg)
-            } else if (arena.contestWhenMultipleCappers && teamsInZone.size > 1) {
-                performLeave(event, cfg)
-            } else {
-                tickCaptureProgress(event, arena, cfg)
-            }
+    private fun tickCaptureFamily(event: KothEvent, arena: KothArena, teamsInZone: List<TeamId>) {
+        val step = applyCaptureControl(event, teamsInZone)
+        step.left?.let { controller -> announceLeave(event, controller) }
+        step.entered?.let { team ->
+            event.leaveAnnouncedFor = null
+            sendEventMessage(
+                event,
+                lang.msg(
+                    "koth.enter",
+                    "entered" to teamName(team),
+                    "koth_name" to arena.id,
+                    "captime" to formatTime(arena.captureSeconds.toLong()),
+                ),
+            )
         }
+        if (step.progressCurrent) tickCaptureProgress(event, arena)
     }
 
-    /** CONQUEST family tick — score accumulation with speed bonuses per capper count */
-    private fun tickConquest(event: KothEvent, arena: KothArena, teamsInZone: List<TeamId>) {
-        if (teamsInZone.size == 1) {
-            val team = teamsInZone.first()
-            event.currentController = team
-            // Count how many players from the controlling team are in the zone for speed bonuses
-            val capperCount = Bukkit.getOnlinePlayers().count { p ->
-                p.isValid && !p.isDead && p.gameMode != GameMode.SPECTATOR
-                        && arena.zone.contains(p.location)
-                        && (if (arena.ignoreFactions) p.uniqueId
-                            else guilds.playerGuildId(p))?.let { pid ->
-                    if (arena.ignoreFactions) TeamId(TeamMode.SOLO, pid) == team
-                    else TeamId(TeamMode.GUILD, pid) == team
-                } == true
-            }
-            val multiplier = arena.captureSpeedBonuses[capperCount] ?: 1.0
-            event.addScore(team, multiplier)
-        } else {
+    private fun announceLeave(event: KothEvent, controller: TeamId) {
+        if (event.leaveAnnouncedFor == controller) return
+        event.leaveAnnouncedFor = controller
+        sendEventMessage(
+            event,
+            lang.msg(
+                "koth.leave",
+                "left" to teamName(controller),
+                "koth_name" to event.arena.id,
+                "time_left" to formatTime(event.arena.captureSeconds.toLong()),
+            ),
+        )
+    }
+
+    private fun tickConquest(event: KothEvent, arena: KothArena, teamsInZone: List<TeamId>, players: List<Player>) {
+        if (teamsInZone.size != 1) {
             event.currentController = null
+            return
         }
+        val team = teamsInZone.first()
+        event.currentController = team
+        val capperCount = players.count { player -> teamFor(player, event) == team }
+        val multiplier = arena.captureSpeedBonuses[capperCount] ?: 1.0
+        event.addScore(team, multiplier)
     }
 
-    /** Score tick for CAPTURE/MOVING — increment toward captureSeconds */
-    private fun tickCaptureProgress(event: KothEvent, arena: KothArena, cfg: EnthusiaKothConfig) {
+    private fun tickCaptureProgress(event: KothEvent, arena: KothArena) {
         val controller = event.currentController ?: return
-        val current = event.scores[controller] ?: 0.0
-        val next = current + 1.0
-        event.scores[controller] = min(arena.captureSeconds.toDouble(), next)
-
-        val secsLeft = arena.captureSeconds - next.toInt()
-        if (secsLeft > 0 && secsLeft % 30 == 0) {
-            val name = teamName(controller)
-            val capMsg = lang.msg("koth.capping", "capping" to name, "koth_name" to arena.id, "time_left" to formatTime(secsLeft.toLong()))
-            Bukkit.broadcast(capMsg)
+        val next = min(arena.captureSeconds.toDouble(), (event.scores[controller] ?: 0.0) + 1.0)
+        event.scores[controller] = next
+        val secondsLeft = arena.captureSeconds - next.toInt()
+        if (secondsLeft > 0 && secondsLeft % 30 == 0) {
+            sendEventMessage(
+                event,
+                lang.msg(
+                    "koth.capping",
+                    "capping" to teamName(controller),
+                    "koth_name" to arena.id,
+                    "time_left" to formatTime(secondsLeft.toLong()),
+                ),
+            )
         }
-
-        if (next >= arena.captureSeconds) {
-            finishEvent(event, cfgLoader(), controller)
-        }
+        if (next >= arena.captureSeconds) finishEvent(event, controller)
     }
 
-    /** Players within the cuboid zone (CAPTURE / CONQUEST) */
-    private fun playersInCuboid(event: KothEvent): List<Player> {
-        val arena = event.arena
-        return Bukkit.getOnlinePlayers().filter { p ->
-            p.isValid && !p.isDead && p.gameMode != GameMode.SPECTATOR
-                    && (!event.isPrivateTest || event.isParticipant(p.uniqueId))
-                    && arena.zone.contains(p.location)
+    private fun playersInCuboid(event: KothEvent): List<Player> =
+        Bukkit.getOnlinePlayers().filter { player ->
+            player.isValid && !player.isDead && player.gameMode != GameMode.SPECTATOR &&
+                event.isParticipant(player.uniqueId) && event.arena.zone.contains(player.location)
         }
-    }
 
-    /** Players near the moving capture point (MOVING) */
     private fun playersNearMovingPoint(event: KothEvent): List<Player> {
         val arena = event.arena
         val point = calculateMovingPoint(event)
         event.movingPoint = point
-        val world = Bukkit.getWorld(arena.zone.worldName) ?: return emptyList()
-        val radiusSq = arena.zone.radiusSq
-        val (px, _, pz) = point
-        return Bukkit.getOnlinePlayers().filter { p ->
-            p.isValid && !p.isDead && p.gameMode != GameMode.SPECTATOR
-                    && (!event.isPrivateTest || event.isParticipant(p.uniqueId))
-                    && p.world.name == arena.zone.worldName
-                    && p.location.distanceSquared(org.bukkit.Location(world, px, p.location.y, pz)) <= radiusSq
+        if (Bukkit.getWorld(arena.zone.worldName) == null) return emptyList()
+        val (x, _, z) = point
+        return Bukkit.getOnlinePlayers().filter { player ->
+            val location = player.location
+            player.isValid && !player.isDead && player.gameMode != GameMode.SPECTATOR &&
+                event.isParticipant(player.uniqueId) && player.world.name == arena.zone.worldName &&
+                isMovingCaptureEligible(arena.zone, location.x, location.y, location.z, x, z)
         }
     }
 
-    /**
-     * Calculate the moving point along a square path
-     */
     private fun calculateMovingPoint(event: KothEvent): Triple<Double, Double, Double> {
-        val arena = event.arena
-        val world = Bukkit.getWorld(arena.zone.worldName)
-        if (world == null) return Triple(0.0, 80.0, 0.0)
-        val centerLoc = event.arena.zone.center(world)
-        val elapsed = (System.currentTimeMillis() - event.startsAt.toEpochMilli()).coerceAtLeast(0) / 1000.0
-        val (px, pz) = movingPointAt(
-            elapsedSeconds = elapsed,
-            squareSize = arena.movingSquareSize,
-            speedBlocksPerSecond = arena.movingSpeedBlocksPerSecond,
-            centerX = centerLoc.x,
-            centerZ = centerLoc.z,
+        val world = Bukkit.getWorld(event.arena.zone.worldName) ?: return Triple(0.0, 80.0, 0.0)
+        val center = event.arena.zone.center(world)
+        val elapsed = (clock.millis() - event.startsAt.toEpochMilli()).coerceAtLeast(0) / 1000.0
+        val (x, z) = movingPointAt(
+            elapsed,
+            event.arena.movingSquareSize,
+            event.arena.movingSpeedBlocksPerSecond,
+            center.x,
+            center.z,
         )
-        return Triple(px, centerLoc.y, pz)
+        return Triple(x, center.y, z)
     }
 
-    /** Determines winner based on family rules */
     private fun resolveWinner(event: KothEvent): TeamId? {
-        // All families: on timeout the winner is the team with the HIGHEST
-        // capture progress — not whoever happens to be standing in the zone.
         val (winner, score) = event.scores.maxByOrNull { it.value } ?: return null
-        if (score <= 0.0) return null
-        val tied = event.scores.count { it.value == score }
-        if (tied > 1) return null
+        if (score <= 0.0 || event.scores.count { it.value == score } > 1) return null
         return winner
     }
 
-    private fun performLeave(event: KothEvent, cfg: EnthusiaKothConfig) {
-        val controller = event.currentController ?: return
-        // Only announce the leave once per controller departure (DECAY keeps the
-        // controller set until the score drains, so this fires every tick otherwise).
-        if (event.leaveAnnouncedFor != controller) {
-            event.leaveAnnouncedFor = controller
-            val name = teamName(controller)
-            val leaveMsg = lang.msg("koth.leave", "left" to name, "koth_name" to event.arena.id, "time_left" to formatTime(event.arena.captureSeconds.toLong()))
-            Bukkit.broadcast(leaveMsg)
-        }
-
-        val arena = event.arena
-        when (arena.leaveBehavior) {
-            CaptureLeaveBehavior.RESET -> {
-                event.scores.clear()
-                event.currentController = null
-            }
-            CaptureLeaveBehavior.DECAY -> {
-                val current = event.scores[controller] ?: 0.0
-                val decayed = (current - arena.decayPerSecond).coerceAtLeast(0.0)
-                if (decayed <= 0.0) {
-                    event.scores.remove(controller)
-                    event.currentController = null
-                } else {
-                    event.scores[controller] = decayed
+    private fun finishEvent(event: KothEvent, winner: TeamId?) {
+        if (activeEvent !== event) return
+        event.state = EventState.COMPLETED
+        val wasContested = event.scores.size > 1
+        try {
+            event.paymentReceipt?.let { receipt ->
+                runCompletionStep(event, "payment settlement") {
+                    if (!receipt.settle()) {
+                        logger(
+                            "KOTH '${event.arena.id}' completed but its paid-start journal could not be marked SETTLED; manual reconciliation is required",
+                            null,
+                        )
+                    }
                 }
             }
-            CaptureLeaveBehavior.PAUSE -> {
-                // Freeze progress — don't reset or decay, keep the score
-                event.currentController = null
+            if (winner != null) {
+                runCompletionStep(event, "winner announcement") {
+                    sendEventMessage(
+                        event,
+                        lang.msg("koth.capture", "captured" to teamName(winner), "koth_name" to event.arena.id),
+                    )
+                }
+                if (!event.isPrivateTest) {
+                    runCompletionStep(event, "statistics update") {
+                        stats.incrementWin(winner.storageKey(), event.arena.id)
+                        stats.save()
+                    }
+                    runCompletionStep(event, "reward execution") {
+                        executeRewards(event, winner)
+                    }
+                }
+            } else {
+                runCompletionStep(event, "no-winner announcement") {
+                    sendEventMessage(event, lang.msg("koth.no_winner", "koth_name" to event.arena.id))
+                }
             }
+        } finally {
+            cleanupEvent(event)
+        }
+
+        if (winner != null && !event.isPrivateTest) {
+            runCompletionStep(event, "Discord capture notification") {
+                discordWebhook.sendCapture(event.arena.id, winner, wasContested)
+            }
+            runCompletionStep(event, "firework celebration") {
+                fireworkService.celebrate(event.arena.zone)
+            }
+        }
+        processQueue()
+    }
+
+    private inline fun runCompletionStep(event: KothEvent, label: String, block: () -> Unit) {
+        runCatching(block).onFailure { error ->
+            logger("KOTH '${event.arena.id}' $label failed during completion", error)
         }
     }
 
-    private fun finishEvent(event: KothEvent, cfg: EnthusiaKothConfig, winner: TeamId?) {
-        event.state = EventState.COMPLETED
-        val msg = cfg.messages
-
-        if (winner != null) {
-            val name = teamName(winner)
-            val capMsg = lang.msg("koth.capture", "captured" to name, "koth_name" to event.arena.id)
-            Bukkit.broadcast(capMsg)
-
-            // Private tests are practice — no stats, rewards, Discord, fireworks
-            if (!event.isPrivateTest) {
-                // Track win
-                val statKey = if (winner.mode == TeamMode.GUILD) {
-                    "guild:${winner.id}"
-                } else {
-                    "solo:${winner.id}"
-                }
-                stats.incrementWin(statKey, event.arena.id)
-                stats.save()
-
-                // Execute reward commands (FactionsKore style)
-                executeRewards(event, winner)
-            }
-        }
-
-        // Capture wasContested BEFORE clearing scores
-        val wasContested = event.scores.size > 1
-        val captured = event.currentController
-
+    private fun cleanupEvent(event: KothEvent) {
         event.clearScores()
         event.currentController = null
-        activeEvent = null
-        reminderCounters.remove(event.arena.id)
+        if (activeEvent === event) activeEvent = null
         discordLastUpdate = null
-        displayService.clear()
-        zoneBorderService.hide()
-
-        // Discord capture announcement + fireworks (skipped for private tests)
-        if (winner != null && !event.isPrivateTest) {
-            discordWebhook.sendCapture(event.arena.id, winner, wasContested)
-            fireworkService.celebrate(event.arena.zone)
-        }
-
-        // Check for queued events
-        processQueue()
+        reminderCounters.remove(event.arena.id)
+        runCatching { eventTerminated(event.id) }
+            .onFailure { logger("KOTH '${event.arena.id}' restriction cleanup failed", it) }
+        runCatching { displayService.clear() }
+            .onFailure { logger("KOTH '${event.arena.id}' display cleanup failed", it) }
+        runCatching { zoneBorderService.hide() }
+            .onFailure { logger("KOTH '${event.arena.id}' zone-border cleanup failed", it) }
     }
 
     private fun executeRewards(event: KothEvent, winner: TeamId) {
         val arena = event.arena
         val name = sanitizeName(teamName(winner))
-        val guildId = if (winner.mode == TeamMode.GUILD) winner.id else null
-
-        // Vault-style family rewards (rewards.<family>.solo/guild-vault-money)
-        val cfg = cfgLoader()
-        val familyReward = cfg.rewards[arena.family.lowercase()]
-        if (familyReward != null) {
-            if (winner.mode == TeamMode.GUILD && familyReward.guildVaultMoney > 0.0) {
-                guilds.depositToVault(winner.id, familyReward.guildVaultMoney, "KOTH win reward")
-            } else if (winner.mode == TeamMode.SOLO && familyReward.soloVaultMoney > 0.0) {
-                // Solo winners get paid via the economy command (no guild vault)
-                Bukkit.dispatchCommand(
-                    Bukkit.getConsoleSender(),
-                    "eco give $name ${familyReward.soloVaultMoney.toLong()}"
-                )
+        val guildId = winner.id.takeIf { winner.mode == TeamMode.GUILD }
+        cfgLoader().rewards[arena.family.lowercase()]?.let { reward ->
+            if (winner.mode == TeamMode.GUILD && reward.guildVaultMoney > 0.0) {
+                val deposited = runCatching { guilds.depositToVault(winner.id, reward.guildVaultMoney, "KOTH win reward") }
+                    .onFailure { logger("Guild reward deposit threw for ${winner.id} amount ${reward.guildVaultMoney}", it) }
+                    .getOrDefault(false)
+                if (!deposited) logger("Guild reward deposit failed for ${winner.id} amount ${reward.guildVaultMoney}", null)
+            } else if (winner.mode == TeamMode.SOLO && reward.soloVaultMoney > 0.0) {
+                val deposited = runCatching { economy.deposit(winner.id, reward.soloVaultMoney) }
+                    .onFailure { logger("Solo Vault reward deposit threw for ${winner.id} amount ${reward.soloVaultMoney}", it) }
+                    .getOrDefault(false)
+                if (!deposited) logger("Solo Vault reward deposit failed for ${winner.id} amount ${reward.soloVaultMoney}", null)
             }
         }
-
-        for (cmd in arena.rewards) {
-            if (executeBankReward(cmd, guildId)) continue // bank deposit — no console command
-            val resolved = cmd
-                .replace("{PLAYER}", name)
-                .replace("{FACTION}", name)
-                .replace("{KOTH}", event.arena.id)
-            if (cmd.contains("{ALL_ONLINE}") && guildId != null) {
-                for (member in guilds.onlineMembers(guildId)) {
-                    Bukkit.dispatchCommand(Bukkit.getConsoleSender(),
-                        resolved.replace("{ALL_ONLINE}", member.name))
-                }
-            } else if (cmd.contains("{ALL_ONLINE}")) {
-                Bukkit.getOnlinePlayers().forEach { p ->
-                    Bukkit.dispatchCommand(Bukkit.getConsoleSender(),
-                        resolved.replace("{ALL_ONLINE}", p.name))
-                }
-            } else {
-                Bukkit.dispatchCommand(Bukkit.getConsoleSender(), resolved)
-            }
+        arena.rewards.forEach { command ->
+            runCatching { executeRewardCommand(command, event, name, guildId) }
+                .onFailure { logger("KOTH reward command failed for '${arena.id}'", it) }
         }
-
-        for ((cmd, chance) in arena.chancedRewards) {
-            if (ThreadLocalRandom.current().nextDouble() * 100.0 >= chance) continue
-            if (executeBankReward(cmd, guildId)) continue
-            val resolved = cmd
-                .replace("{PLAYER}", name)
-                .replace("{FACTION}", name)
-                .replace("{KOTH}", event.arena.id)
-            if (cmd.contains("{ALL_ONLINE}") && guildId != null) {
-                for (member in guilds.onlineMembers(guildId)) {
-                    Bukkit.dispatchCommand(Bukkit.getConsoleSender(),
-                        resolved.replace("{ALL_ONLINE}", member.name))
-                }
-            } else {
-                Bukkit.dispatchCommand(Bukkit.getConsoleSender(), resolved)
+        arena.chancedRewards.forEach { (command, chance) ->
+            if (ThreadLocalRandom.current().nextDouble() * 100.0 < chance) {
+                runCatching { executeRewardCommand(command, event, name, guildId) }
+                    .onFailure { logger("KOTH chanced reward command failed for '${arena.id}'", it) }
             }
         }
     }
 
-    /**
-     * Handles [bank N] reward entry.
-     * Deposits directly to the guild vault via GuildLookup.bankDeposit(),
-     * bypassing Vault/console commands entirely.
-     *
-     * Syntax:
-     *   bank 500 — deposit 500 to the winning guild's bank
-     */
-    private fun executeBankReward(cmd: String, guildId: UUID?): Boolean {
-        if (!cmd.startsWith("bank", ignoreCase = true)) return false
-        if (guildId == null) return true // solo winners can't get guild bank rewards
+    private fun executeRewardCommand(command: String, event: KothEvent, name: String, guildId: UUID?) {
+        if (executeBankReward(command, guildId)) return
+        val resolved = command.replace("{PLAYER}", name).replace("{FACTION}", name).replace("{KOTH}", event.arena.id)
+        if (resolved.contains("{ALL_ONLINE}") && guildId != null) {
+            guilds.onlineMembers(guildId).forEach { member ->
+                val command = resolved.replace("{ALL_ONLINE}", member.name)
+                if (!Bukkit.dispatchCommand(Bukkit.getConsoleSender(), command)) logger("KOTH reward command was rejected: $command", null)
+            }
+        } else if (resolved.contains("{ALL_ONLINE}")) {
+            Bukkit.getOnlinePlayers().forEach { player ->
+                val command = resolved.replace("{ALL_ONLINE}", player.name)
+                if (!Bukkit.dispatchCommand(Bukkit.getConsoleSender(), command)) logger("KOTH reward command was rejected: $command", null)
+            }
+        } else if (!Bukkit.dispatchCommand(Bukkit.getConsoleSender(), resolved)) {
+            logger("KOTH reward command was rejected: $resolved", null)
+        }
+    }
 
-        val parts = cmd.split("\\s+".toRegex())
-        if (parts.size < 2) return true
-
-        val amount = parts[1].toLongOrNull() ?: return true
-        guilds.depositToVault(guildId, amount.toDouble(), "KOTH guild reward")
+    private fun executeBankReward(command: String, guildId: UUID?): Boolean {
+        if (!command.startsWith("bank", ignoreCase = true)) return false
+        if (guildId == null) return true
+        val amount = command.split("\\s+".toRegex()).getOrNull(1)?.toDoubleOrNull() ?: return true
+        val deposited = runCatching { guilds.depositToVault(guildId, amount, "KOTH guild reward") }
+            .onFailure { logger("KOTH bank reward threw for $guildId amount $amount", it) }
+            .getOrDefault(false)
+        if (!deposited) logger("KOTH bank reward deposit failed for $guildId amount $amount", null)
         return true
     }
 
+    @Synchronized
     fun startEvent(
         arena: KothArena,
         durationOverride: Int? = null,
-        kind: EventKind = EventKind.STANDARD,
-        paidByGuild: UUID? = null,
-        paidCost: Double = 0.0,
+        kind: EventKind = EventKind.PLAYER_COMMAND,
+        delaySeconds: Int = 0,
+        paymentReceipt: PaymentReceipt? = null,
+        teamMode: TeamMode = TeamMode.SOLO,
     ): Boolean {
         if (activeEvent != null) return false
         val cfg = cfgLoader()
         if (!cfg.locks.state.allows(kind)) return false
-        val now = Instant.now()
-        val duration = durationOverride ?: arena.durationSeconds
+        val now = clock.instant()
+        val start = now.plusSeconds(delaySeconds.coerceAtLeast(0).toLong())
         val event = KothEvent(
             id = UUID.randomUUID(),
             arena = arena,
-            startsAt = now,
-            endsAt = now.plusSeconds(duration.toLong()),
-            state = EventState.ACTIVE,
-            paidByGuild = paidByGuild,
-            paidCost = paidCost,
+            startsAt = start,
+            endsAt = start.plusSeconds((durationOverride ?: arena.durationSeconds).toLong()),
+            state = if (delaySeconds > 0) EventState.STARTING else EventState.ACTIVE,
+            teamMode = if (arena.ignoreFactions) TeamMode.SOLO else teamMode,
+            paymentReceipt = paymentReceipt,
         )
         activeEvent = event
-        val beginMsg = lang.msg("koth.begin", "koth_name" to arena.id, "location" to locString(arena.zone))
-        Bukkit.broadcast(beginMsg)
-        discordWebhook.sendStart(arena.id, locString(arena.zone))
-        if (cfg.display.zoneBorder) zoneBorderService.show(arena.zone)
-        return true
-    }
-
-    /**
-     * Queue an event to start when the current one finishes.
-     * If no event is active, starts immediately.
-     */
-    fun queueStart(arena: KothArena, kind: EventKind = EventKind.STANDARD): Boolean {
-        if (activeEvent == null) {
-            return startEvent(arena, kind = kind)
-        }
-        eventQueue.add(QueuedEvent(arena, kind, Instant.now()))
-        return true
-    }
-
-    /**
-     * Process the next queued event, if any.
-     * Called automatically at the end of [finishEvent].
-     */
-    fun processQueue() {
-        val next = eventQueue.removeFirstOrNull() ?: return
-        startEvent(next.arena, kind = next.startSource)
-    }
-
-    /** Returns the next queued event without removing it, or null if the queue is empty. */
-    fun nextQueued(): QueuedEvent? = eventQueue.firstOrNull()
-
-    /** Returns a snapshot of all currently queued events. */
-    fun queuedEvents(): List<QueuedEvent> = eventQueue.toList()
-
-    /** Drops all queued events (called on reload — queued arenas may be stale). */
-    fun clearQueue() {
-        eventQueue.clear()
-    }
-
-    /** Start a private test KOTH with lobby and quick timing */
-    fun startPrivateTest(arena: KothArena, ownerId: UUID, cfg: EnthusiaKothConfig): Boolean {
-        if (activeEvent != null) return false
-        if (!cfg.locks.state.allows(EventKind.PRIVATE_TEST)) return false
-        val testing = cfg.privateTesting
-        val now = Instant.now()
-        val lobbySecs = testing.lobbySeconds.coerceAtLeast(0)
-        val duration = if (testing.quickMatchDurationSeconds > 0) testing.quickMatchDurationSeconds else arena.durationSeconds
-        val captureSecs = if (testing.quickCaptureSeconds > 0) testing.quickCaptureSeconds else arena.captureSeconds
-
-        val quickArena = arena.copy(
-            durationSeconds = duration,
-            captureSeconds = captureSecs,
-        )
-        val event = KothEvent(
-            id = UUID.randomUUID(),
-            arena = quickArena,
-            startsAt = now.plusSeconds(lobbySecs.toLong()),
-            endsAt = now.plusSeconds((lobbySecs + duration).toLong()),
-            state = if (lobbySecs > 0) EventState.STARTING else EventState.ACTIVE,
-            owner = ownerId,
-            isPrivateTest = true,
-            lobbySeconds = lobbySecs,
-        )
-        // Auto-join the owner
-        event.join(ownerId)
-        activeEvent = event
-
-        if (lobbySecs > 0) {
-            val p = Bukkit.getPlayer(ownerId)
-            p?.sendMessage(lang.msg("private.lobby_open", "seconds" to lobbySecs.toString()))
-        } else {
-            val p = Bukkit.getPlayer(ownerId)
-            p?.sendMessage(lang.msg("private.started", "duration" to duration.toString(), "capture" to captureSecs.toString()))
-            if (testing.showObjectiveParticles) {
-                p?.sendMessage(lang.msg("private.objective_particles"))
+        if (event.state == EventState.ACTIVE) {
+            try {
+                activateEvent(event, cfg)
+            } catch (error: Throwable) {
+                logger("KOTH '${arena.id}' failed during activation", error)
+                cancelEvent(
+                    event,
+                    CancellationReason.ACTIVATION_FAILURE,
+                    announce = false,
+                    advanceQueue = false,
+                )
+                return false
             }
         }
         return true
     }
 
-    fun forceEnd(): Boolean {
-        val event = activeEvent ?: return false
-        val endMsg = lang.msg("koth.ended", "koth_name" to event.arena.id)
-        Bukkit.broadcast(endMsg)
-        refundPaidStart(event)
-        event.state = EventState.CANCELLED
-        event.clearScores()
-        event.currentController = null
-        activeEvent = null
-        reminderCounters.remove(event.arena.id)
-        displayService.clear()
-        zoneBorderService.hide()
+    @Synchronized
+    fun queueStart(
+        arena: KothArena,
+        kind: EventKind = EventKind.SCHEDULED,
+        scheduledAt: Instant = clock.instant(),
+        teamMode: TeamMode = TeamMode.SOLO,
+        occurrenceId: String? = null,
+    ): Boolean {
+        if (queueDirty && !persistQueue()) return false
+        if (occurrenceId != null && eventQueue.any { it.occurrenceId == occurrenceId }) return true
+
+        val queued = QueuedEvent(
+            arenaId = arena.id,
+            startSource = kind,
+            scheduledAt = scheduledAt,
+            teamMode = if (arena.ignoreFactions) TeamMode.SOLO else teamMode,
+            occurrenceId = occurrenceId,
+        )
+        eventQueue += queued
+        if (!persistQueue()) {
+            eventQueue.remove(queued)
+            queueDirty = false
+            return false
+        }
         return true
     }
 
-    /** Refund the guild if this event was started with a paid start. */
-    private fun refundPaidStart(event: KothEvent) {
-        val guildId = event.paidByGuild ?: return
-        val cost = event.paidCost
-        if (cost <= 0.0) return
-        guilds.depositToVault(guildId, cost, "KOTH start refund")
-    }
+    @Synchronized
+    fun processQueue() {
+        if (suppressNextQueueProcess) {
+            suppressNextQueueProcess = false
+            return
+        }
+        if (activeEvent != null) return
+        if (queueDirty && !persistQueue()) return
 
-    private fun resolveTeams(players: List<Player>, arena: KothArena): List<TeamId> {
-        val teams = mutableSetOf<TeamId>()
-        if (arena.ignoreFactions) {
-            // Skip guild resolution — everyone caps solo
-            players.forEach { p -> teams.add(TeamId(TeamMode.SOLO, p.uniqueId)) }
-        } else {
-            // Players in a guild cap for their guild; unaffiliated players cap solo
-            players.forEach { p ->
-                val guildId = guilds.playerGuildId(p)
-                if (guildId != null) {
-                    teams.add(TeamId(TeamMode.GUILD, guildId))
-                } else {
-                    teams.add(TeamId(TeamMode.SOLO, p.uniqueId))
+        while (activeEvent == null) {
+            val next = eventQueue.firstOrNull() ?: return
+            when (next.state) {
+                QueuedEventState.COMPLETED -> if (!compactCompleted(next)) return
+                QueuedEventState.ACTIVATING -> {
+                    resumeActivating(next)
+                    return
+                }
+                QueuedEventState.READY -> {
+                    processReady(next)
+                    return
                 }
             }
         }
-        return teams.toList()
     }
 
-    private fun teamName(team: TeamId): String {
-        return if (team.mode == TeamMode.GUILD) {
-            guilds.guildName(team.id) ?: team.id.toString().take(8)
-        } else {
-            Bukkit.getOfflinePlayer(team.id).name ?: team.id.toString().take(8)
+    private fun processReady(next: QueuedEvent) {
+        val now = clock.instant()
+        if (now.isBefore(next.nextAttemptAt)) return
+        if (!scheduledClaimAllowsActivation(next)) return
+
+        val arena = arenaResolver(next.arenaId)
+        if (arena == null) {
+            removeInvalidQueued(next)
+            return
+        }
+        if (!cfgLoader().locks.state.allows(next.startSource)) {
+            eventQueue[0] = retryLater(next, now)
+            if (!persistQueue()) {
+                logger("Failed to persist retry timing for queued KOTH '${next.arenaId}'; the prior durable READY state is still recoverable", null)
+            }
+            return
+        }
+
+        val activating = next.copy(
+            state = QueuedEventState.ACTIVATING,
+            activationId = next.activationId ?: UUID.randomUUID(),
+        )
+        eventQueue[0] = activating
+        if (!persistQueue()) {
+            eventQueue[0] = next
+            queueDirty = false
+            logger("Deferred queued KOTH '${next.arenaId}' because READY -> ACTIVATING could not be persisted", null)
+            return
+        }
+
+        if (!startDurableActivation(activating, arena, recovered = false)) {
+            retryActivation(activating, now)
         }
     }
 
-    /**
-     * Sanitizes a guild/player name for safe substitution into console commands.
-     * Strips legacy color codes and MiniMessage tags, then restricts to [A-Za-z0-9_].
-     */
-    private fun sanitizeName(raw: String): String {
-        val stripped = raw.replace(Regex("§[0-9a-fk-orA-FK-OR]"), "")
-            .replace(Regex("<[^>]*>"), "")
-        return stripped.filter { it.isLetterOrDigit() || it == '_' }
+    private fun resumeActivating(next: QueuedEvent) {
+        val now = clock.instant()
+        if (!scheduledClaimAllowsActivation(next)) return
+        val arena = arenaResolver(next.arenaId)
+        if (arena == null) {
+            removeInvalidQueued(next)
+            return
+        }
+        if (!cfgLoader().locks.state.allows(next.startSource) || next.activationId == null) {
+            retryActivation(next, now)
+            return
+        }
+        if (!startDurableActivation(next, arena, recovered = true)) {
+            retryActivation(next, now)
+        }
     }
 
-    fun capperName(event: KothEvent): String? {
-        val ctl = event.currentController ?: return null
-        return teamName(ctl)
+    private fun startDurableActivation(next: QueuedEvent, arena: KothArena, recovered: Boolean): Boolean {
+        if (activeEvent != null) return false
+        val cfg = cfgLoader()
+        if (!cfg.locks.state.allows(next.startSource)) return false
+        val activationId = next.activationId ?: return false
+        val now = clock.instant()
+        val event = KothEvent(
+            id = activationId,
+            arena = arena,
+            startsAt = now,
+            endsAt = now.plusSeconds(arena.durationSeconds.toLong()),
+            state = EventState.ACTIVE,
+            teamMode = if (arena.ignoreFactions) TeamMode.SOLO else next.teamMode,
+        )
+        activeEvent = event
+        activateQueuedEvent(event, cfg, recovered)
+
+        val completed = next.copy(state = QueuedEventState.COMPLETED)
+        eventQueue[0] = completed
+        if (!persistQueue()) {
+            logger(
+                "KOTH '${next.arenaId}' activation ${event.id} is active but COMPLETED could not be persisted; " +
+                    "the durable ACTIVATING record will resume the same activation id after a hard crash",
+                null,
+            )
+            return true
+        }
+        compactCompleted(completed)
+        return true
     }
+
+    private fun retryActivation(next: QueuedEvent, now: Instant) {
+        eventQueue[0] = retryLater(next, now)
+        if (!persistQueue()) {
+            logger(
+                "Failed to persist ACTIVATING -> READY retry for KOTH '${next.arenaId}'; " +
+                    "the durable ACTIVATING record remains recoverable and will retry the same occurrence after restart",
+                null,
+            )
+        }
+    }
+
+    private fun compactCompleted(completed: QueuedEvent): Boolean {
+        if (eventQueue.firstOrNull() != completed) return true
+        eventQueue.removeAt(0)
+        if (persistQueue()) return true
+        eventQueue.add(0, completed)
+        logger(
+            "Could not compact completed queued KOTH '${completed.arenaId}'; its durable COMPLETED marker will prevent replay after restart",
+            null,
+        )
+        return false
+    }
+
+    private fun removeInvalidQueued(next: QueuedEvent) {
+        eventQueue.removeAt(0)
+        if (!persistQueue()) {
+            eventQueue.add(0, next)
+            logger("Could not durably remove invalid queued KOTH '${next.arenaId}'; keeping it until the removal can be persisted", null)
+            return
+        }
+        logger("Removing permanently invalid queued KOTH '${next.arenaId}'", null)
+    }
+
+    private fun scheduledClaimAllowsActivation(event: QueuedEvent): Boolean {
+        if (event.startSource != EventKind.SCHEDULED || event.occurrenceId == null) return true
+        val scheduleStore = queueStore as? ScheduleStateStore ?: return true
+        return runCatching {
+            when (scheduleStore.claimStatus("start:${event.occurrenceId}")) {
+                ScheduleClaimStatus.PENDING -> false
+                ScheduleClaimStatus.COMMITTED, null -> true
+            }
+        }.getOrElse { error ->
+            logger("Could not verify schedule claim for queued KOTH '${event.arenaId}'; activation remains deferred", error)
+            false
+        }
+    }
+
+    private fun retryLater(event: QueuedEvent, now: Instant): QueuedEvent = event.copy(
+        attempts = if (event.attempts == Int.MAX_VALUE) Int.MAX_VALUE else event.attempts + 1,
+        nextAttemptAt = now.plusSeconds(QUEUE_RETRY_SECONDS),
+        state = QueuedEventState.READY,
+        activationId = null,
+    )
+
+    fun nextQueued(): QueuedEvent? = synchronized(this) { eventQueue.firstOrNull { it.state != QueuedEventState.COMPLETED } }
+    fun queuedEvents(): List<QueuedEvent> = synchronized(this) { eventQueue.filter { it.state != QueuedEventState.COMPLETED } }
+    internal fun queuedOccurrenceIds(): Set<String> = synchronized(this) { eventQueue.mapNotNull { it.occurrenceId }.toSet() }
+
+    @Synchronized
+    fun clearQueue(): Boolean {
+        val previous = eventQueue.toList()
+        eventQueue.clear()
+        if (persistQueue()) return true
+        eventQueue.addAll(previous)
+        return false
+    }
+
+    private fun persistQueue(): Boolean {
+        return try {
+            queueStore.save(eventQueue)
+            queueDirty = false
+            true
+        } catch (error: Throwable) {
+            queueDirty = true
+            logger("Failed to persist KOTH queue; durable state was not advanced", error)
+            false
+        }
+    }
+
+    @Synchronized
+    fun startPrivateTest(
+        arena: KothArena,
+        ownerId: UUID,
+        cfg: EnthusiaKothConfig,
+        teamMode: TeamMode,
+        access: PrivateTestAccess,
+        quickTiming: Boolean,
+    ): Boolean {
+        if (!supportsPrivateTesting(arena)) return false
+        if (activeEvent != null || !cfg.locks.state.allows(EventKind.PRIVATE_TEST)) return false
+        val testing = cfg.privateTesting
+        val lobbySeconds = testing.lobbySeconds.coerceAtLeast(0)
+        val duration = if (quickTiming) {
+            testing.quickMatchDurationSeconds.takeIf { it > 0 } ?: arena.durationSeconds
+        } else {
+            arena.durationSeconds
+        }
+        val capture = if (quickTiming) {
+            testing.quickCaptureSeconds.takeIf { it > 0 } ?: arena.captureSeconds
+        } else {
+            arena.captureSeconds
+        }
+        val now = clock.instant()
+        val event = KothEvent(
+            id = UUID.randomUUID(),
+            arena = arena.copy(durationSeconds = duration, captureSeconds = capture),
+            startsAt = now.plusSeconds(lobbySeconds.toLong()),
+            endsAt = now.plusSeconds((lobbySeconds + duration).toLong()),
+            state = if (lobbySeconds > 0) EventState.STARTING else EventState.ACTIVE,
+            teamMode = if (arena.ignoreFactions) TeamMode.SOLO else teamMode,
+            owner = ownerId,
+            isPrivateTest = true,
+            privateTestAccess = access,
+            lobbySeconds = lobbySeconds,
+        )
+        event.join(ownerId)
+        activeEvent = event
+        Bukkit.getPlayer(ownerId)?.let { owner ->
+            if (lobbySeconds > 0) {
+                val key = if (access == PrivateTestAccess.PERMISSION_JOIN) "private.lobby_open_staff" else "private.lobby_open_self"
+                owner.sendMessage(lang.msg(key, "seconds" to lobbySeconds.toString()))
+            } else {
+                owner.sendMessage(lang.msg("private.started", "duration" to duration.toString(), "capture" to capture.toString()))
+            }
+        }
+        return true
+    }
+
+    @Synchronized
+    fun forceEnd(
+        reason: CancellationReason = CancellationReason.ADMINISTRATIVE,
+        announce: Boolean = reason == CancellationReason.ADMINISTRATIVE,
+    ): Boolean {
+        val event = activeEvent ?: return false
+        return cancelEvent(event, reason, announce)
+    }
+
+    private fun cancelEvent(
+        event: KothEvent,
+        reason: CancellationReason,
+        announce: Boolean,
+        advanceQueue: Boolean = reason != CancellationReason.RELOAD && reason != CancellationReason.PLUGIN_DISABLE,
+    ): Boolean {
+        if (activeEvent !== event) return false
+        lastCancellationRefundPending = false
+        if (announce) {
+            runCatching { sendEventMessage(event, lang.msg("koth.ended", "koth_name" to event.arena.id)) }
+                .onFailure { logger("KOTH '${event.arena.id}' cancellation announcement failed", it) }
+        }
+        val refunded = refundPayment(event, reason)
+        lastCancellationRefundPending = !refunded
+        event.state = EventState.CANCELLED
+        cleanupEvent(event)
+        if (advanceQueue) processQueue()
+        return true
+    }
+
+    private fun refundPayment(event: KothEvent, reason: CancellationReason): Boolean {
+        val receipt = event.paymentReceipt ?: return true
+        if (!receipt.beginRefund()) {
+            val complete = receipt.isRefunded() || !receipt.isOutstanding()
+            if (!complete) notifyPendingRefund(receipt, reason)
+            return complete
+        }
+        val refunded = try {
+            economy.deposit(receipt.payerId, receipt.amount)
+        } catch (error: Throwable) {
+            logger(
+                "KOTH ${reason.name.lowercase()} refund threw for ${receipt.payerId} amount ${receipt.amount}; journal remains REFUNDING for manual reconciliation",
+                error,
+            )
+            notifyPendingRefund(receipt, reason)
+            return false
+        }
+        if (!receipt.completeRefund(refunded)) {
+            logger(
+                "KOTH ${reason.name.lowercase()} refund result could not be persisted for ${receipt.payerId} amount ${receipt.amount}; durable state remains REFUNDING for manual reconciliation",
+                null,
+            )
+            notifyPendingRefund(receipt, reason)
+            return false
+        }
+        if (!refunded) notifyPendingRefund(receipt, reason)
+        return refunded
+    }
+
+    private fun notifyPendingRefund(receipt: PaymentReceipt, reason: CancellationReason) {
+        logger(
+            "KOTH ${reason.name.lowercase()} refund remains unresolved for ${receipt.payerId} amount ${receipt.amount}; durable payment-journal recovery or manual reconciliation is required",
+            null,
+        )
+        runCatching { Bukkit.getPlayer(receipt.payerId) }
+            .onFailure { logger("Could not notify ${receipt.payerId} about the pending KOTH refund", it) }
+            .getOrNull()
+            ?.sendMessage(lang.msg("command.error.refund_failed"))
+    }
+
+    private fun resolveTeams(players: List<Player>, event: KothEvent): List<TeamId> =
+        players.mapNotNull { teamFor(it, event) }.distinct()
+
+    private fun teamFor(player: Player, event: KothEvent): TeamId? =
+        event.resolveTeam(player.uniqueId, guilds.playerGuildId(player))
+
+    private fun teamName(team: TeamId): String = if (team.mode == TeamMode.GUILD) {
+        guilds.guildName(team.id) ?: team.id.toString().take(8)
+    } else Bukkit.getOfflinePlayer(team.id).name ?: team.id.toString().take(8)
+
+    private fun sanitizeName(raw: String): String = raw
+        .replace(Regex("§[0-9a-fk-orA-FK-OR]"), "")
+        .replace(Regex("<[^>]*>"), "")
+        .filter { it.isLetterOrDigit() || it == '_' }
+
+    fun capperName(event: KothEvent): String? = event.currentController?.let(::teamName)
 
     private fun locString(zone: CaptureZone): String {
         val world = Bukkit.getWorld(zone.worldName) ?: return "?,?,?"
-        val c = zone.center(world)
-        return "${c.blockX}, ${c.blockY}, ${c.blockZ}"
+        val center = zone.center(world)
+        return "${center.blockX}, ${center.blockY}, ${center.blockZ}"
     }
 
     private fun progressBar(event: KothEvent, cfg: ProgressBarConfig): net.kyori.adventure.text.Component {
-        val arena = event.arena
-        // Fixed target for ALL families: conquest sums would never reach 1.0
-        // when multiple teams hold points, making the bar meaningless.
-        val max = arena.captureSeconds.coerceAtLeast(1).toDouble()
-        val current = event.scores.values.maxOrNull() ?: 0.0
-        val progress = (current / max).coerceIn(0.0, 1.0)
+        val progress = if (event.arena.family.equals("moving", true) || event.arena.family.equals("conquest", true)) {
+            displayProgress(event, clock.instant()).toDouble()
+        } else {
+            val maximum = event.arena.captureSeconds.coerceAtLeast(1).toDouble()
+            ((event.scores.values.maxOrNull() ?: 0.0) / maximum).coerceIn(0.0, 1.0)
+        }
         val filled = (progress * cfg.length).toInt()
-        val empty = (cfg.length - filled).coerceAtLeast(0)
-        val emptyColor = lang.raw("progress_bar.empty_color")
-        // Build the bar as a MiniMessage fragment: filled chars in the default
-        // color, empty chars in the configured empty color.
-        val bar = cfg.character.repeat(filled) + emptyColor + cfg.character.repeat(empty)
+        val bar = cfg.character.repeat(filled) + lang.raw("progress_bar.empty_color") +
+            cfg.character.repeat((cfg.length - filled).coerceAtLeast(0))
         return lang.msg("progress_bar.format", "progress_bar" to bar)
     }
 
-    private fun broadcast(msg: String, vararg pairs: Pair<String, String>) {
-        var resolved = msg
-        for ((key, value) in pairs) {
-            resolved = resolved.replace("{$key}", value)
-        }
-        val component = resolved.replace("&", "§").toComponent()
-        Bukkit.broadcast(component)
+    private fun eventRecipients(event: KothEvent): List<Player> = if (event.isPrivateTest) {
+        event.participants.mapNotNull { Bukkit.getPlayer(it) }
+    } else Bukkit.getOnlinePlayers().toList()
+
+    private fun sendEventMessage(event: KothEvent, message: net.kyori.adventure.text.Component) {
+        if (event.isPrivateTest) eventRecipients(event).forEach { it.sendMessage(message) }
+        else Bukkit.broadcast(message)
     }
 
     private fun formatTime(seconds: Long): String {
-        val m = seconds / 60
-        val s = seconds % 60
-        return if (m > 0) "${m}m ${s}s" else "${s}s"
+        val safe = seconds.coerceAtLeast(0)
+        val minutes = safe / 60
+        val remainder = safe % 60
+        return if (minutes > 0) "${minutes}m ${remainder}s" else "${remainder}s"
     }
 
-    fun shutdown() {
-        forceEnd()
+    fun shutdown(reason: CancellationReason = CancellationReason.PLUGIN_DISABLE) {
+        if (reason == CancellationReason.RELOAD || reason == CancellationReason.PLUGIN_DISABLE) {
+            suppressNextQueueProcess = true
+        }
+        forceEnd(reason, announce = false)
+        persistQueue()
     }
 }

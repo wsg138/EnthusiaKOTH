@@ -1,0 +1,12 @@
+players:
+  11111111-1111-1111-1111-111111111111:
+    name: Lincoln
+    capture: 3
+    moving: 2
+    all: 5
+guilds:
+  aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa:
+    name: Builders
+    capture: 6
+    conquest: 4
+    all: 10

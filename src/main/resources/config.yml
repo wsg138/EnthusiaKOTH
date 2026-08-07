@@ -1,4 +1,4 @@
-config-version: 5
+config-version: 6
 
 general:
   timezone: "America/New_York"
@@ -7,14 +7,15 @@ locks:
   state: "UNLOCKED"
 
 manual-start:
+  enabled: true
   basic-cost: 0.0
   advanced-cost: 0.0
+  delay-seconds: 0
 
 private-testing:
   lobby-seconds: 0
   quick-match-duration-seconds: 120
   quick-capture-seconds: 15
-  show-objective-particles: true
 
 schedule:
   enabled: false
@@ -24,9 +25,6 @@ schedule:
     - "08:00"
     - "16:00"
 
-# FactionsKore-style per-arena schedules
-# Each arena can have its own schedule in arena config below
-
 flares:
   enabled: true
   item:
@@ -34,39 +32,15 @@ flares:
     name: "&c{KOTH} Koth Flare"
     lore:
       - "&7Right-Click to start a &c{KOTH} &7koth!"
-  messages:
-    give-flare: "&aGave &e{PLAYER} {AMOUNT} &akoth flares."
-    received-flare: "&aYou received a &e{KOTH} &akoth flare!"
-    not-in-region: "&cYou must be on the &e{KOTH} &ccapture point to use the flare!"
-    already-active: "&cThe &e{KOTH} &ckoth is already active."
-    started-with-flare: "&aStarted the &e{KOTH} &akoth with your flare."
-    started-broadcast: "&e{PLAYER} &astarted the &e{KOTH} &akoth with a flare! Go to &e{LOCATION}&a!"
 
 progress-bar:
   enabled: true
   length: 10
   character: "|"
-  format: "&cKOTH Progress: &8[{PROGRESS_BAR}&8]"
 
 reminders:
   enabled: true
   interval-seconds: 300
-  format: "&aReminder that the {KOTH} koth is still active! {CAPPER}&8({TIME_LEFT})&a is currently capturing."
-
-messages:
-  enter: "&a{ENTERED} entered the {KOTH_NAME} koth! Cap in {CAP_TIME}!"
-  leave: "&a{LEFT} left the {KOTH_NAME} koth! {TIME_LEFT} left!"
-  capping: "&a{CAPPING} is capturing the {KOTH_NAME} koth! {TIME_LEFT} left!"
-  capture: "&a{CAPTURED} captured the {KOTH_NAME} koth!"
-  begin: "&a{KOTH_NAME} has begun! Location: {LOCATION}"
-  forcefully-ended: "&cThe koth {KOTH} has been forcefully ended!"
-  koth-top-header: "&7&m-----&r &c&lKoth Top &7(&c{PAGE}&8/&c{PAGE_MAX}&7) &m-----"
-  koth-top-format: "&e{INDEX}. &a{USER} &e{WINS} &awins"
-  koth-stats-format: "&e{PLAYER} &ahas &e{WINS} &akoth wins."
-  koth-schedule-header: "&7&m-----&r &a&lKoth Schedule &7&m-----\n &cTime Now: {TIME_NOW}\n &cTimeZone: {TIME_ZONE}"
-
-storage:
-  stats-file: "stats.yml"
 
 discord:
   enabled: false
@@ -79,7 +53,7 @@ display:
 
 rules:
   defaults:
-    capture:
+    capture: &default-rules
       elytra: true
       mace: "FULLY_ALLOWED"
       spear: true
@@ -89,28 +63,9 @@ rules:
       spear-cooldown-seconds: 0
       ender-pearl-cooldown-seconds: 0
       wind-charge-cooldown-seconds: 0
-    moving:
-      elytra: true
-      mace: "FULLY_ALLOWED"
-      spear: true
-      ender-pearl: true
-      wind-charge: true
-      mace-cooldown-seconds: 0
-      spear-cooldown-seconds: 0
-      ender-pearl-cooldown-seconds: 0
-      wind-charge-cooldown-seconds: 0
-    conquest:
-      elytra: true
-      mace: "FULLY_ALLOWED"
-      spear: true
-      ender-pearl: true
-      wind-charge: true
-      mace-cooldown-seconds: 0
-      spear-cooldown-seconds: 0
-      ender-pearl-cooldown-seconds: 0
-      wind-charge-cooldown-seconds: 0
+    moving: *default-rules
+    conquest: *default-rules
 
-# Arena definitions — FactionsKore-inspired configuration
 arenas:
   capture:
     enabled: true
@@ -125,19 +80,12 @@ arenas:
     capture-seconds: 120
     leave-behavior: "RESET"
     decay-per-second: 1.0
-    # FactionsKore-style per-koth options
     ignore-factions: false
     contest-when-multiple-cappers: true
     flares-must-be-placed-on-cap: true
-    # FactionsKore-style per-koth HH:mm schedule
     schedule: []
-    # FactionsKore-style command rewards
-    # Use "bank <amount>" to deposit directly to the winning guild's vault (no console command needed)
-    # Use "give {PLAYER} diamond 1" for console commands
-    # Use "give {ALL_ONLINE} diamond 1" to run a command per online member
     rewards:
       - "bank 500"
-    # FactionsKore-style chanced rewards (percentage: command)
     chanced-rewards:
       "20.0": "bank 50"
   moving:
@@ -170,6 +118,10 @@ arenas:
     schedule: []
     rewards: []
     chanced-rewards: {}
+    capture-speed-bonuses:
+      1: 1.0
+      2: 1.5
+      3: 2.0
 
 rewards:
   capture:

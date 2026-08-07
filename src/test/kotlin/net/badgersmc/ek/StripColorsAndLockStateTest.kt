@@ -1,16 +1,19 @@
 package net.badgersmc.ek
 
+import io.mockk.mockk
+import net.badgersmc.ek.domain.EventKind
+import net.badgersmc.ek.domain.EventState
+import net.badgersmc.ek.domain.KothArena
+import net.badgersmc.ek.domain.KothEvent
+import net.badgersmc.ek.domain.LockState
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import java.time.Instant
+import java.util.UUID
 
-/**
- * Legacy color-code stripping — used for names before they're substituted
- * into console reward commands.
- */
 class StripColorsTest {
-
     @Test
     fun `strips legacy section codes`() {
         assertEquals("Hello", "§aHello".stripColors())
@@ -20,7 +23,6 @@ class StripColorsTest {
 
     @Test
     fun `strips legacy RGB section sequences`() {
-        // §x§R§R§G§G§B§B — the RGB prefix that the old regex missed
         assertEquals("Hello", "§x§F§F§C§8§0§0Hello".stripColors())
         assertEquals("Hello", "&x&F&F&C&8&0&0Hello".stripColors())
     }
@@ -37,30 +39,61 @@ class StripColorsTest {
     }
 }
 
-/**
- * Lock-state gating — MANUAL_LOCKED must block manually-started KOTHs
- * (commands, flares) but let scheduled rotations and private tests through.
- */
 class LockStateTest {
-
     @Test
-    fun `unlocked allows everything`() {
-        assertTrue(net.badgersmc.ek.domain.LockState.UNLOCKED.allows(net.badgersmc.ek.domain.EventKind.STANDARD))
-        assertTrue(net.badgersmc.ek.domain.LockState.UNLOCKED.allows(net.badgersmc.ek.domain.EventKind.SCHEDULED))
-        assertTrue(net.badgersmc.ek.domain.LockState.UNLOCKED.allows(net.badgersmc.ek.domain.EventKind.PRIVATE_TEST))
+    fun `unlocked allows every start source`() {
+        EventKind.entries.forEach { assertTrue(LockState.UNLOCKED.allows(it), it.name) }
     }
 
     @Test
-    fun `manual locked blocks manual starts but not scheduled or private`() {
-        assertFalse(net.badgersmc.ek.domain.LockState.MANUAL_LOCKED.allows(net.badgersmc.ek.domain.EventKind.STANDARD))
-        assertTrue(net.badgersmc.ek.domain.LockState.MANUAL_LOCKED.allows(net.badgersmc.ek.domain.EventKind.SCHEDULED))
-        assertTrue(net.badgersmc.ek.domain.LockState.MANUAL_LOCKED.allows(net.badgersmc.ek.domain.EventKind.PRIVATE_TEST))
+    fun `manual lock blocks player command gui and flare only`() {
+        assertFalse(LockState.MANUAL_LOCKED.allows(EventKind.PLAYER_COMMAND))
+        assertFalse(LockState.MANUAL_LOCKED.allows(EventKind.GUI))
+        assertFalse(LockState.MANUAL_LOCKED.allows(EventKind.FLARE))
+        assertTrue(LockState.MANUAL_LOCKED.allows(EventKind.ADMIN))
+        assertTrue(LockState.MANUAL_LOCKED.allows(EventKind.SCHEDULED))
+        assertTrue(LockState.MANUAL_LOCKED.allows(EventKind.PRIVATE_TEST))
     }
 
     @Test
-    fun `all locked blocks everything`() {
-        assertFalse(net.badgersmc.ek.domain.LockState.ALL_LOCKED.allows(net.badgersmc.ek.domain.EventKind.STANDARD))
-        assertFalse(net.badgersmc.ek.domain.LockState.ALL_LOCKED.allows(net.badgersmc.ek.domain.EventKind.SCHEDULED))
-        assertFalse(net.badgersmc.ek.domain.LockState.ALL_LOCKED.allows(net.badgersmc.ek.domain.EventKind.PRIVATE_TEST))
+    fun `all lock blocks every start source`() {
+        EventKind.entries.forEach { assertFalse(LockState.ALL_LOCKED.allows(it), it.name) }
+    }
+}
+
+class PrivateParticipationTest {
+    @Test
+    fun `private event admits owner and joined participants only`() {
+        val owner = UUID.randomUUID()
+        val joined = UUID.randomUUID()
+        val outsider = UUID.randomUUID()
+        val now = Instant.parse("2026-08-06T12:00:00Z")
+        val event = KothEvent(
+            id = UUID.randomUUID(),
+            arena = mockk<KothArena>(),
+            startsAt = now,
+            endsAt = now.plusSeconds(60),
+            state = EventState.ACTIVE,
+            owner = owner,
+            isPrivateTest = true,
+        )
+        event.join(joined)
+
+        assertTrue(event.isParticipant(owner))
+        assertTrue(event.isParticipant(joined))
+        assertFalse(event.isParticipant(outsider))
+    }
+
+    @Test
+    fun `public event admits all players`() {
+        val now = Instant.parse("2026-08-06T12:00:00Z")
+        val event = KothEvent(
+            id = UUID.randomUUID(),
+            arena = mockk<KothArena>(),
+            startsAt = now,
+            endsAt = now.plusSeconds(60),
+            state = EventState.ACTIVE,
+        )
+        assertTrue(event.isParticipant(UUID.randomUUID()))
     }
 }
