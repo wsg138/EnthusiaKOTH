@@ -2,8 +2,8 @@ package net.badgersmc.ek
 
 import java.nio.file.Files
 import java.nio.file.Path
-import kotlin.test.Test
-import kotlin.test.assertTrue
+import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Test
 
 /**
  * Inventory guard for major KOTH production feature families.
