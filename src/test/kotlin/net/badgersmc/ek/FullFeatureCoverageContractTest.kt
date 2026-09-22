@@ -48,31 +48,31 @@ class FullFeatureCoverageContractTest {
         "schedule and timezone behavior" to listOf(
             "src/test/kotlin/net/badgersmc/ek/application/ScheduleServiceTest.kt",
             "src/test/kotlin/net/badgersmc/ek/application/ScheduleTimeTest.kt",
-            "src/test/kotlin/net/badgersmc/ek/infrastructure/TimezoneParserTest.kt",
+            "src/test/kotlin/net/badgersmc/ek/infrastructure/bukkit/TimezoneParserTest.kt",
         ),
         "moving objective and markers" to listOf(
             "src/test/kotlin/net/badgersmc/ek/application/MovingPathTest.kt",
             "src/test/kotlin/net/badgersmc/ek/application/ObjectiveMarkerServiceTest.kt",
         ),
         "restrictions and region protection" to listOf(
-            "src/test/kotlin/net/badgersmc/ek/infrastructure/RestrictionServiceTest.kt",
-            "src/test/kotlin/net/badgersmc/ek/infrastructure/RestrictionListenerTest.kt",
-            "src/test/kotlin/net/badgersmc/ek/infrastructure/RegionProtectionListenerTest.kt",
+            "src/test/kotlin/net/badgersmc/ek/infrastructure/restriction/RestrictionServiceTest.kt",
+            "src/test/kotlin/net/badgersmc/ek/infrastructure/restriction/RestrictionListenerTest.kt",
+            "src/test/kotlin/net/badgersmc/ek/infrastructure/protection/RegionProtectionListenerTest.kt",
         ),
         "durable payment journal and operational recovery" to listOf(
-            "src/test/kotlin/net/badgersmc/ek/infrastructure/FilePaymentJournalTest.kt",
-            "src/test/kotlin/net/badgersmc/ek/infrastructure/OperationalStateStoreTest.kt",
+            "src/test/kotlin/net/badgersmc/ek/infrastructure/persistence/FilePaymentJournalTest.kt",
+            "src/test/kotlin/net/badgersmc/ek/infrastructure/persistence/OperationalStateStoreTest.kt",
         ),
         "legacy statistics migration" to listOf(
-            "src/test/kotlin/net/badgersmc/ek/infrastructure/LegacyStatsMigrationTest.kt",
+            "src/test/kotlin/net/badgersmc/ek/infrastructure/persistence/LegacyStatsMigrationTest.kt",
         ),
         "configuration, commands, language and permissions" to listOf(
-            "src/test/kotlin/net/badgersmc/ek/infrastructure/ConfigSurfaceTest.kt",
-            "src/test/kotlin/net/badgersmc/ek/infrastructure/LanguageAndPermissionContractTest.kt",
+            "src/test/kotlin/net/badgersmc/ek/infrastructure/bukkit/ConfigSurfaceTest.kt",
+            "src/test/kotlin/net/badgersmc/ek/infrastructure/i18n/LanguageAndPermissionContractTest.kt",
         ),
         "Discord delivery and placeholders" to listOf(
-            "src/test/kotlin/net/badgersmc/ek/infrastructure/DiscordDeliveryPolicyTest.kt",
-            "src/test/kotlin/net/badgersmc/ek/infrastructure/PlaceholderResolverTest.kt",
+            "src/test/kotlin/net/badgersmc/ek/infrastructure/discord/DiscordDeliveryPolicyTest.kt",
+            "src/test/kotlin/net/badgersmc/ek/infrastructure/papi/PlaceholderResolverTest.kt",
         ),
         "plugin compatibility surface" to listOf(
             "src/test/kotlin/net/badgersmc/ek/PluginCompatibilityTest.kt",
