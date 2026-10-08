@@ -16,6 +16,8 @@ interface GuildLookup {
     fun getBankBalance(guildId: UUID): Long
     fun bankWithdraw(guildId: UUID, actorId: UUID, amount: Long, reason: String): Boolean
     fun bankDeposit(guildId: UUID, actorId: UUID, amount: Long, reason: String): Boolean
+    fun systemBankWithdraw(guildId: UUID, amount: Long, reason: String): Boolean = false
+    fun systemBankDeposit(guildId: UUID, amount: Long, reason: String): Boolean = false
 }
 
 data class GuildSummary(

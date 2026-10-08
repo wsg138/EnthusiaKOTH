@@ -67,18 +67,28 @@ class LumaGuildsAdapter {
 
     fun depositToVault(guildId: UUID, amount: Double, reason: String): Boolean {
         val lk = lookup ?: return false
-        if (!amount.isFinite() || amount <= 0.0 || amount > Long.MAX_VALUE.toDouble()) return false
+        if (!amount.isFinite() || amount <= 0.0 || amount > Int.MAX_VALUE.toDouble()) return false
         val units = amount.toLong()
         if (units.toDouble() != amount) return false
-        return lk.bankDeposit(guildId, guildId, units, reason)
+        return systemBankCall { lk.systemBankDeposit(guildId, units, reason) }
     }
 
     fun withdrawFromVault(guildId: UUID, amount: Double, reason: String): Boolean {
         val lk = lookup ?: return false
-        if (!amount.isFinite() || amount <= 0.0 || amount > Long.MAX_VALUE.toDouble()) return false
+        if (!amount.isFinite() || amount <= 0.0 || amount > Int.MAX_VALUE.toDouble()) return false
         val units = amount.toLong()
         if (units.toDouble() != amount) return false
-        return lk.bankWithdraw(guildId, guildId, units, reason)
+        return systemBankCall { lk.systemBankWithdraw(guildId, units, reason) }
+    }
+
+    // Old provider/API combinations cannot safely fall back to player banking:
+    // that path checks personal permissions and transfers a player's wallet.
+    private fun systemBankCall(operation: () -> Boolean): Boolean = try {
+        operation()
+    } catch (_: NoSuchMethodError) {
+        false
+    } catch (_: AbstractMethodError) {
+        false
     }
 
     fun getBalance(guildId: UUID): Long {
